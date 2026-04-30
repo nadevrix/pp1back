@@ -1,0 +1,351 @@
+{
+    "info": {
+        "_postman_id": "pollar-pay-v2-2026",
+        "name": "Pollar-Pay Backend API v2",
+        "description": "Colección completa de Pollar-Pay.\n\nFlujo: Crear Proyecto → Intent de Pago → Polling Status → Admin Refund.\n\nEndpoints admin requieren header X-Admin-Secret.\n\n⚠️ Ejecutar en ORDEN: Paso 1 guarda api_key, paso 2 guarda transaction_id.",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "variable": [
+        {
+            "key": "base_url",
+            "value": "http://localhost:3000",
+            "type": "string"
+        },
+        {
+            "key": "api_key",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "transaction_id",
+            "value": "",
+            "type": "string"
+        },
+        {
+            "key": "admin_secret",
+            "value": "PON_AQUI_TU_ADMIN_SECRET_KEY",
+            "type": "string"
+        }
+    ],
+    "item": [
+        {
+            "name": "📁 Merchant",
+            "item": [
+                {
+                    "name": "1. Crear Proyecto",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "if(pm.response.code===201){var d=pm.response.json();pm.collectionVariables.set('api_key',d.project.api_key);console.log('✅ API Key: '+d.project.api_key)}"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"merchant_id\": \"{{$randomUUID}}\",\n    \"name\": \"Mi Tienda\",\n    \"reason\": \"Pagos USDC en Stellar\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/projects/create",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "projects",
+                                "create"
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "💳 SDK / Pagos",
+            "item": [
+                {
+                    "name": "2. Crear Intent de Pago",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "if(pm.response.code===200){var d=pm.response.json();pm.collectionVariables.set('transaction_id',d.data.transaction_id);console.log('✅ Tx: '+d.data.transaction_id+' Wallet: '+d.data.wallet_address)}"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"api_key\": \"{{api_key}}\",\n    \"amount_expected\": \"2.00\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/sdk/pay",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "sdk",
+                                "pay"
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "2b. Test Amount Validation (should fail)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"api_key\": \"{{api_key}}\",\n    \"amount_expected\": \"-5\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/sdk/pay",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "sdk",
+                                "pay"
+                            ]
+                        },
+                        "description": "⚠️ Debería devolver 400. Testea la validación de montos."
+                    }
+                },
+                {
+                    "name": "3. Consultar Estado (Polling)",
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/sdk/status?transaction_id={{transaction_id}}&api_key={{api_key}}",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "sdk",
+                                "status"
+                            ],
+                            "query": [
+                                {
+                                    "key": "transaction_id",
+                                    "value": "{{transaction_id}}"
+                                },
+                                {
+                                    "key": "api_key",
+                                    "value": "{{api_key}}"
+                                }
+                            ]
+                        },
+                        "description": "Polling del estado. Si hay anomalía (overpaid/underpaid) incluye info de soporte con número de contacto."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "🔧 Admin (requiere X-Admin-Secret)",
+            "item": [
+                {
+                    "name": "4. Dashboard KPIs",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "X-Admin-Secret",
+                                "value": "{{admin_secret}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/admin/dashboard",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "admin",
+                                "dashboard"
+                            ]
+                        },
+                        "description": "KPIs en tiempo real: wallets pool, Treasury, transacciones por estado, volumen."
+                    }
+                },
+                {
+                    "name": "5. Listar Wallets",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "X-Admin-Secret",
+                                "value": "{{admin_secret}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{base_url}}/api/admin/wallets",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "admin",
+                                "wallets"
+                            ]
+                        },
+                        "description": "Lista todas las wallets del pool y treasury con estado de lock."
+                    }
+                },
+                {
+                    "name": "6. Crear Wallet (agregar al pool)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "X-Admin-Secret",
+                                "value": "{{admin_secret}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/admin/wallets",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "admin",
+                                "wallets"
+                            ]
+                        },
+                        "description": "Crea nueva wallet pool: Friendbot → USDC trustline → DB insert. El stream la detecta automáticamente en ~60s."
+                    }
+                },
+                {
+                    "name": "7. Eliminar Wallet del Pool",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "X-Admin-Secret",
+                                "value": "{{admin_secret}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"public_key\": \"GXXXXXX_WALLET_PUBKEY_AQUI\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/admin/wallets",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "admin",
+                                "wallets"
+                            ]
+                        },
+                        "description": "Elimina wallet del pool (solo si no está locked ni tiene pending txs). La cuenta Stellar sigue existiendo."
+                    }
+                },
+                {
+                    "name": "8. Ejecutar Reembolso",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "X-Admin-Secret",
+                                "value": "{{admin_secret}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transaction_id\": \"{{transaction_id}}\",\n    \"destination_wallet\": \"GDIRECCCION_STELLAR_DEL_CLIENTE\",\n    \"amount\": \"0.50\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/admin/refund",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "admin",
+                                "refund"
+                            ]
+                        },
+                        "description": "Reembolso desde Treasury. Requiere X-Admin-Secret. Verifica que la tx no esté ya refunded."
+                    }
+                },
+                {
+                    "name": "8b. Test Refund sin Auth (should fail 401)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transaction_id\": \"{{transaction_id}}\",\n    \"destination_wallet\": \"GTEST\",\n    \"amount\": \"1\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/admin/refund",
+                            "host": [
+                                "{{base_url}}"
+                            ],
+                            "path": [
+                                "api",
+                                "admin",
+                                "refund"
+                            ]
+                        },
+                        "description": "⚠️ Debería devolver 401 Unauthorized. Testea que el refund no funciona sin X-Admin-Secret."
+                    }
+                }
+            ]
+        }
+    ]
+}
