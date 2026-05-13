@@ -1,9 +1,9 @@
 import crypto from 'crypto';
 
-// Use a 32-byte key from env, or a fallback for local development testing
-const ENCRYPTION_KEY = process.env.POLLAR_MASTER_ENCRYPTION_KEY
-    ? Buffer.from(process.env.POLLAR_MASTER_ENCRYPTION_KEY, 'hex')
-    : crypto.scryptSync('development-secret', 'salt', 32);
+if (!process.env.POLLAR_MASTER_ENCRYPTION_KEY) {
+    throw new Error('POLLAR_MASTER_ENCRYPTION_KEY is not set. Cannot start without a wallet encryption key.');
+}
+const ENCRYPTION_KEY = Buffer.from(process.env.POLLAR_MASTER_ENCRYPTION_KEY, 'hex');
 
 const ALGORITHM = 'aes-256-gcm';
 

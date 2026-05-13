@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { validateAdminAuth } from '@/lib/admin-auth';
 import { Keypair, TransactionBuilder, Operation } from '@stellar/stellar-sdk';
-import { server, USDC_ASSET, NETWORK_PASSPHRASE } from '@/lib/forwarder';
+import { stellarClient, USDC_ASSET, NETWORK_PASSPHRASE } from '@/lib/stellar/client';
 import { encryptKey } from '@/lib/crypto';
 
 // GET — List all wallets with lock status
@@ -13,9 +13,9 @@ export async function GET(request: Request) {
     try {
         const { data: wallets, error } = await supabase
             .from('wallets')
-            .select('public_key, wallet_type, is_locked, locked_until, last_project_id, created_at')
+            .select('public_key, wallet_type, wallet_index, is_locked, locked_until, last_project_id, created_at')
             .order('wallet_type', { ascending: false })
-            .order('created_at', { ascending: true });
+            .order('wallet_index', { ascending: true });
 
         if (error) throw error;
 
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
                 pool_locked: poolWallets.filter(w => w.is_locked).length,
                 pool_available: poolWallets.filter(w => !w.is_locked).length,
                 treasury_count: treasuryWallets.length,
-                wallets: wallets
+                wallets
             }
         });
     } catch (err: any) {
@@ -37,7 +37,7 @@ export async function GET(request: Request) {
     }
 }
 
-// POST — Create a new pool wallet (Friendbot + USDC trustline + DB insert)
+// POST — Create a new pool wallet and add it to the round-robin rotation
 export async function POST(request: Request) {
     const authError = validateAdminAuth(request);
     if (authError) return authError;
@@ -46,8 +46,15 @@ export async function POST(request: Request) {
         const keypair = Keypair.random();
         const publicKey = keypair.publicKey();
 
-        // 1. Fund with Friendbot (testnet only)
-        const friendbotRes = await fetch(`https://friendbot.stellar.org?addr=${publicKey}`);
+        // 1. Fund with Friendbot (testnet only — STELLAR_FRIENDBOT_URL must be set)
+        const FRIENDBOT_URL = process.env.STELLAR_FRIENDBOT_URL;
+        if (!FRIENDBOT_URL) {
+            return NextResponse.json(
+                { error: 'STELLAR_FRIENDBOT_URL is not configured. Friendbot only exists on testnet.' },
+                { status: 503 }
+            );
+        }
+        const friendbotRes = await fetch(`${FRIENDBOT_URL}?addr=${publicKey}`);
         if (!friendbotRes.ok) {
             return NextResponse.json(
                 { error: 'Friendbot funding failed. Testnet may be overloaded, retry in a few seconds.' },
@@ -56,7 +63,7 @@ export async function POST(request: Request) {
         }
 
         // 2. Establish USDC trustline
-        const account = await server.loadAccount(publicKey);
+        const account = await stellarClient.loadAccount(publicKey);
         const tx = new TransactionBuilder(account, {
             fee: '100',
             networkPassphrase: NETWORK_PASSPHRASE
@@ -66,25 +73,37 @@ export async function POST(request: Request) {
             .build();
 
         tx.sign(keypair);
-        await server.submitTransaction(tx);
+        await stellarClient.submitTransaction(tx);
 
-        // 3. Insert into DB
+        // 3. Determine the next wallet_index so this wallet enters the round robin automatically
+        const { data: maxRow } = await supabase
+            .from('wallets')
+            .select('wallet_index')
+            .eq('wallet_type', 'pool')
+            .order('wallet_index', { ascending: false })
+            .limit(1)
+            .single();
+
+        const nextIndex = (maxRow?.wallet_index ?? -1) + 1;
+
+        // 4. Insert into DB
         const { error: dbError } = await supabase.from('wallets').insert({
             public_key: publicKey,
             secret_key_encrypted: encryptKey(keypair.secret()),
-            wallet_type: 'pool'
+            wallet_type: 'pool',
+            wallet_index: nextIndex
         });
 
         if (dbError) throw dbError;
 
         return NextResponse.json({
             success: true,
-            message: 'Pool wallet created with USDC trustline',
+            message: 'Pool wallet created and added to round-robin rotation',
             wallet: {
                 public_key: publicKey,
                 wallet_type: 'pool',
-                is_locked: false,
-                note: 'Restart the stream listener to start monitoring this wallet, or wait for the next dynamic refresh cycle.'
+                wallet_index: nextIndex,
+                is_locked: false
             }
         }, { status: 201 });
 
@@ -106,7 +125,6 @@ export async function DELETE(request: Request) {
             return NextResponse.json({ error: 'Missing public_key' }, { status: 400 });
         }
 
-        // 1. Check the wallet exists and is a pool wallet
         const { data: wallet, error: wError } = await supabase
             .from('wallets')
             .select('public_key, wallet_type, is_locked')
@@ -128,7 +146,6 @@ export async function DELETE(request: Request) {
             );
         }
 
-        // 2. Check no pending transactions use this wallet
         const { data: pendingTxs } = await supabase
             .from('transactions')
             .select('id')
@@ -143,7 +160,6 @@ export async function DELETE(request: Request) {
             );
         }
 
-        // 3. Delete from DB (the wallet still exists on Stellar, just removed from pool rotation)
         const { error: delError } = await supabase
             .from('wallets')
             .delete()
@@ -154,7 +170,7 @@ export async function DELETE(request: Request) {
         return NextResponse.json({
             success: true,
             message: 'Wallet removed from pool rotation',
-            note: 'The Stellar account still exists. Funds can be recovered manually if needed.'
+            note: 'The Stellar account still exists on the blockchain. The round-robin will skip this index automatically.'
         });
 
     } catch (err: any) {

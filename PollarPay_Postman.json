@@ -1,348 +1,702 @@
 {
     "info": {
-        "_postman_id": "pollar-pay-v2-2026",
-        "name": "Pollar-Pay Backend API v2",
-        "description": "Colección completa de Pollar-Pay.\n\nFlujo: Crear Proyecto → Intent de Pago → Polling Status → Admin Refund.\n\nEndpoints admin requieren header X-Admin-Secret.\n\n⚠️ Ejecutar en ORDEN: Paso 1 guarda api_key, paso 2 guarda transaction_id.",
+        "_postman_id": "pollar-pay-v3-2026",
+        "name": "Pollar-Pay Backend API v3",
+        "description": "Colección completa para probar el backend de Pollar-Pay como frontend temporal.\n\n=== SETUP ANTES DE USAR ===\n1. Aplicar database/schema.sql en Supabase SQL Editor\n2. Correr: npx ts-node scripts/seed-wallets.ts --count 10\n3. Configurar las variables de esta colección (ver pestaña Variables)\n4. Levantar el backend: npm run dev\n\n=== FLUJO NORMAL DE PRUEBA ===\nPaso 1 → Paso 2 → Paso 3 (repetir) → Paso 4 (simular cron) → ver estado\n\n=== SECRETOS NECESARIOS EN .env.local ===\n- ADMIN_SECRET_KEY\n- CRON_SECRET\n- POLLAR_MASTER_ENCRYPTION_KEY\n- SUPABASE_SERVICE_ROLE_KEY\n- NEXT_PUBLIC_SUPABASE_URL",
         "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
     },
     "variable": [
         {
             "key": "base_url",
             "value": "http://localhost:3000",
-            "type": "string"
+            "type": "string",
+            "description": "URL del backend. Cambiar si usas otro puerto."
         },
         {
             "key": "api_key",
             "value": "",
-            "type": "string"
+            "type": "string",
+            "description": "Se llena automáticamente al crear un proyecto (Paso 1)."
         },
         {
             "key": "transaction_id",
             "value": "",
-            "type": "string"
+            "type": "string",
+            "description": "Se llena automáticamente al crear un intent de pago (Paso 2)."
         },
         {
             "key": "admin_secret",
             "value": "PON_AQUI_TU_ADMIN_SECRET_KEY",
-            "type": "string"
+            "type": "string",
+            "description": "Valor de ADMIN_SECRET_KEY en tu .env.local"
+        },
+        {
+            "key": "cron_secret",
+            "value": "PON_AQUI_TU_CRON_SECRET",
+            "type": "string",
+            "description": "Valor de CRON_SECRET en tu .env.local"
+        },
+        {
+            "key": "payout_wallet",
+            "value": "PON_AQUI_TU_STELLAR_PUBLIC_KEY",
+            "type": "string",
+            "description": "Tu Stellar public key (empieza con G, 56 chars). Donde el merchant recibe los pagos."
         }
     ],
     "item": [
         {
-            "name": "📁 Merchant",
+            "name": "📁 PASO 1 — Crear Proyecto (Merchant)",
+            "description": "El merchant crea su proyecto y obtiene su api_key.\nEsta api_key se usa en todos los endpoints SDK.\n\n⚠️ Ejecutar en orden: el script guarda api_key automáticamente.",
             "item": [
                 {
-                    "name": "1. Crear Proyecto",
+                    "name": "1a. Crear Proyecto ✅ (debe funcionar → 201)",
                     "event": [
                         {
                             "listen": "test",
                             "script": {
                                 "type": "text/javascript",
                                 "exec": [
-                                    "if(pm.response.code===201){var d=pm.response.json();pm.collectionVariables.set('api_key',d.project.api_key);console.log('✅ API Key: '+d.project.api_key)}"
+                                    "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                                    "pm.test('Tiene api_key', () => {",
+                                    "    const d = pm.response.json();",
+                                    "    pm.expect(d.project.api_key).to.be.a('string');",
+                                    "    pm.collectionVariables.set('api_key', d.project.api_key);",
+                                    "    console.log('✅ API Key guardada:', d.project.api_key);",
+                                    "    console.log('   Proyecto ID:', d.project.id);",
+                                    "    console.log('   Payout Wallet:', d.project.payout_wallet);",
+                                    "});"
                                 ]
                             }
                         }
                     ],
                     "request": {
                         "method": "POST",
-                        "header": [
-                            {
-                                "key": "Content-Type",
-                                "value": "application/json"
-                            }
-                        ],
+                        "header": [{"key": "Content-Type", "value": "application/json"}],
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n    \"merchant_id\": \"{{$randomUUID}}\",\n    \"name\": \"Mi Tienda\",\n    \"reason\": \"Pagos USDC en Stellar\"\n}"
+                            "raw": "{\n    \"merchant_id\": \"{{$randomUUID}}\",\n    \"name\": \"Mi Tienda Test\",\n    \"reason\": \"Pagos USDC en Stellar — testnet\",\n    \"payout_wallet\": \"{{payout_wallet}}\"\n}"
                         },
                         "url": {
                             "raw": "{{base_url}}/api/projects/create",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "projects",
-                                "create"
-                            ]
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "projects", "create"]
+                        },
+                        "description": "Crea un proyecto y obtiene la api_key.\n\nLo que devuelve:\n- project.id: UUID del proyecto\n- project.api_key: UUID que se usa en los endpoints SDK\n- project.name: nombre del proyecto\n- project.payout_wallet: wallet del merchant confirmada\n\nEl script guarda api_key en la variable de colección automáticamente."
+                    }
+                },
+                {
+                    "name": "1b. Sin payout_wallet ❌ (debe fallar → 400)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                                    "pm.test('Mensaje de error claro', () => {",
+                                    "    const d = pm.response.json();",
+                                    "    pm.expect(d.error).to.include('payout_wallet');",
+                                    "    console.log('✅ Error esperado:', d.error);",
+                                    "});"
+                                ]
+                            }
                         }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [{"key": "Content-Type", "value": "application/json"}],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"merchant_id\": \"{{$randomUUID}}\",\n    \"name\": \"Mi Tienda\",\n    \"reason\": \"Test sin wallet\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/projects/create",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "projects", "create"]
+                        },
+                        "description": "⚠️ Debe devolver 400. Verifica que payout_wallet es requerido."
+                    }
+                },
+                {
+                    "name": "1c. Wallet Stellar inválida ❌ (debe fallar → 400)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                                    "pm.test('Error de wallet inválida', () => {",
+                                    "    const d = pm.response.json();",
+                                    "    pm.expect(d.error).to.include('Invalid payout_wallet');",
+                                    "    console.log('✅ Error esperado:', d.error);",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [{"key": "Content-Type", "value": "application/json"}],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"merchant_id\": \"{{$randomUUID}}\",\n    \"name\": \"Mi Tienda\",\n    \"reason\": \"Test wallet inválida\",\n    \"payout_wallet\": \"ESTO_NO_ES_UNA_STELLAR_KEY\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/projects/create",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "projects", "create"]
+                        },
+                        "description": "⚠️ Debe devolver 400. Verifica que la validación de Stellar public key funciona."
                     }
                 }
             ]
         },
         {
-            "name": "💳 SDK / Pagos",
+            "name": "💳 PASO 2 — Crear Intent de Pago (SDK)",
+            "description": "El merchant (desde su app) crea un intent de pago para un cliente.\nDevuelve la wallet del pool asignada y el QR que el cliente debe escanear.",
             "item": [
                 {
-                    "name": "2. Crear Intent de Pago",
+                    "name": "2a. Crear Intent ✅ (debe funcionar → 200)",
                     "event": [
                         {
                             "listen": "test",
                             "script": {
                                 "type": "text/javascript",
                                 "exec": [
-                                    "if(pm.response.code===200){var d=pm.response.json();pm.collectionVariables.set('transaction_id',d.data.transaction_id);console.log('✅ Tx: '+d.data.transaction_id+' Wallet: '+d.data.wallet_address)}"
+                                    "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                                    "pm.test('Tiene wallet y transaction_id', () => {",
+                                    "    const d = pm.response.json().data;",
+                                    "    pm.expect(d.transaction_id).to.be.a('string');",
+                                    "    pm.expect(d.wallet_address).to.match(/^G[A-Z2-7]{55}$/);",
+                                    "    pm.expect(d.amount).to.equal('2');",
+                                    "    pm.expect(d.asset).to.equal('USDC');",
+                                    "    pm.collectionVariables.set('transaction_id', d.transaction_id);",
+                                    "    console.log('✅ Transaction ID guardado:', d.transaction_id);",
+                                    "    console.log('   Wallet para QR:', d.wallet_address);",
+                                    "    console.log('   Monto:', d.amount, d.asset);",
+                                    "    console.log('   Expira:', d.expires_at);",
+                                    "    console.log('   Red:', d.network);",
+                                    "});"
                                 ]
                             }
                         }
                     ],
                     "request": {
                         "method": "POST",
-                        "header": [
-                            {
-                                "key": "Content-Type",
-                                "value": "application/json"
-                            }
-                        ],
+                        "header": [{"key": "Content-Type", "value": "application/json"}],
                         "body": {
                             "mode": "raw",
                             "raw": "{\n    \"api_key\": \"{{api_key}}\",\n    \"amount_expected\": \"2.00\"\n}"
                         },
                         "url": {
                             "raw": "{{base_url}}/api/sdk/pay",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "sdk",
-                                "pay"
-                            ]
-                        }
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "sdk", "pay"]
+                        },
+                        "description": "Genera un intent de pago.\n\nEl backend hace:\n1. Valida la api_key → obtiene project_id\n2. Llama a claim_wallet() RPC → asigna wallet del pool en round-robin atómico\n3. Crea transacción pending en DB con expires_at = ahora + 15min\n4. Devuelve wallet_address para generar el QR\n\nEl cliente escanea el QR y envía USDC a esa dirección."
                     }
                 },
                 {
-                    "name": "2b. Test Amount Validation (should fail)",
+                    "name": "2b. Monto negativo ❌ (debe fallar → 400)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                                    "console.log('✅ Rechazó monto inválido:', pm.response.json().error);"
+                                ]
+                            }
+                        }
+                    ],
                     "request": {
                         "method": "POST",
-                        "header": [
-                            {
-                                "key": "Content-Type",
-                                "value": "application/json"
-                            }
-                        ],
+                        "header": [{"key": "Content-Type", "value": "application/json"}],
                         "body": {
                             "mode": "raw",
                             "raw": "{\n    \"api_key\": \"{{api_key}}\",\n    \"amount_expected\": \"-5\"\n}"
                         },
                         "url": {
                             "raw": "{{base_url}}/api/sdk/pay",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "sdk",
-                                "pay"
-                            ]
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "sdk", "pay"]
                         },
-                        "description": "⚠️ Debería devolver 400. Testea la validación de montos."
+                        "description": "⚠️ Debe devolver 400. Monto negativo no permitido."
                     }
                 },
                 {
-                    "name": "3. Consultar Estado (Polling)",
+                    "name": "2c. Monto cero ❌ (debe fallar → 400)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                                    "console.log('✅ Rechazó monto 0:', pm.response.json().error);"
+                                ]
+                            }
+                        }
+                    ],
                     "request": {
-                        "method": "GET",
-                        "url": {
-                            "raw": "{{base_url}}/api/sdk/status?transaction_id={{transaction_id}}&api_key={{api_key}}",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "sdk",
-                                "status"
-                            ],
-                            "query": [
-                                {
-                                    "key": "transaction_id",
-                                    "value": "{{transaction_id}}"
-                                },
-                                {
-                                    "key": "api_key",
-                                    "value": "{{api_key}}"
-                                }
-                            ]
+                        "method": "POST",
+                        "header": [{"key": "Content-Type", "value": "application/json"}],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"api_key\": \"{{api_key}}\",\n    \"amount_expected\": \"0\"\n}"
                         },
-                        "description": "Polling del estado. Si hay anomalía (overpaid/underpaid) incluye info de soporte con número de contacto."
+                        "url": {
+                            "raw": "{{base_url}}/api/sdk/pay",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "sdk", "pay"]
+                        },
+                        "description": "⚠️ Debe devolver 400. Monto 0 no permitido."
+                    }
+                },
+                {
+                    "name": "2d. API Key inválida ❌ (debe fallar → 401)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 401', () => pm.response.to.have.status(401));",
+                                    "console.log('✅ Rechazó API key inválida:', pm.response.json().error);"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [{"key": "Content-Type", "value": "application/json"}],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"api_key\": \"00000000-0000-0000-0000-000000000000\",\n    \"amount_expected\": \"5.00\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/sdk/pay",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "sdk", "pay"]
+                        },
+                        "description": "⚠️ Debe devolver 401. API key que no existe en la DB."
                     }
                 }
             ]
         },
         {
-            "name": "🔧 Admin (requiere X-Admin-Secret)",
+            "name": "🔍 PASO 3 — Consultar Estado del Pago (Polling)",
+            "description": "El merchant/SDK consulta el estado de la transacción.\nEjecutar múltiples veces para simular polling mientras se espera el pago.",
             "item": [
                 {
-                    "name": "4. Dashboard KPIs",
+                    "name": "3a. Consultar Estado ✅",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                                    "pm.test('Datos de estado correctos', () => {",
+                                    "    const d = pm.response.json().data;",
+                                    "    pm.expect(d.transaction_id).to.be.a('string');",
+                                    "    pm.expect(d.status).to.be.a('string');",
+                                    "    console.log('📊 Estado:', d.status);",
+                                    "    console.log('   Esperado:', d.amount_expected, 'USDC');",
+                                    "    console.log('   Pagado:', d.amount_paid, 'USDC');",
+                                    "    console.log('   Restante:', d.remaining, 'USDC');",
+                                    "    console.log('   Tiempo restante:', d.time_remaining_seconds, 'seg');",
+                                    "    if(d.support) console.log('⚠️  Soporte:', d.support.message);",
+                                    "});"
+                                ]
+                            }
+                        }
+                    ],
                     "request": {
                         "method": "GET",
-                        "header": [
-                            {
-                                "key": "X-Admin-Secret",
-                                "value": "{{admin_secret}}"
+                        "url": {
+                            "raw": "{{base_url}}/api/sdk/status?transaction_id={{transaction_id}}&api_key={{api_key}}",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "sdk", "status"],
+                            "query": [
+                                {"key": "transaction_id", "value": "{{transaction_id}}"},
+                                {"key": "api_key", "value": "{{api_key}}"}
+                            ]
+                        },
+                        "description": "Consulta el estado actual de la transacción.\n\nEstados posibles:\n- pending: esperando pago (amount_paid se actualiza si hay pagos parciales)\n- completed: pago exacto recibido, fondos enviados al merchant\n- overpaid: pagaron más de lo esperado (incluye campo 'support')\n- underpaid: expiró con pago parcial (incluye campo 'support')\n- expired: expiró sin ningún pago\n- refunded: admin emitió reembolso\n\nCuando status es overpaid o underpaid, la respuesta incluye:\n  support.contact: teléfono de soporte\n  support.message: instrucciones para el cliente"
+                    }
+                },
+                {
+                    "name": "3b. Transaction ID inexistente ❌ (debe fallar → 404)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                                    "console.log('✅ Error 404 correcto:', pm.response.json().error);"
+                                ]
                             }
-                        ],
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/sdk/status?transaction_id=00000000-0000-0000-0000-000000000000&api_key={{api_key}}",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "sdk", "status"],
+                            "query": [
+                                {"key": "transaction_id", "value": "00000000-0000-0000-0000-000000000000"},
+                                {"key": "api_key", "value": "{{api_key}}"}
+                            ]
+                        },
+                        "description": "⚠️ Debe devolver 404. Transaction ID que no existe."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "⏱️ PASO 4 — Cron (Simular procesamiento de pagos)",
+            "description": "En producción este endpoint lo llama un scheduler externo cada 5-10 segundos.\nAquí lo ejecutamos manualmente para simular que el tiempo pasó y el cron corrió.\n\nDespués de ejecutarlo, volver al Paso 3 para ver si el estado cambió.",
+            "item": [
+                {
+                    "name": "4a. Ejecutar Check de Pagos ✅",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                                    "const d = pm.response.json();",
+                                    "console.log('⏱️  Cron ejecutado');",
+                                    "console.log('   Transacciones procesadas:', d.processed);",
+                                    "if(d.results && d.results.length > 0){",
+                                    "    d.results.forEach(r => {",
+                                    "        console.log('   TX', r.id.slice(0,8)+'...', '→', r.status, r.received ? '(recibido: '+r.received+')' : '');",
+                                    "    });",
+                                    "} else {",
+                                    "    console.log('   No hay transacciones pendientes.');",
+                                    "}"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [{"key": "x-cron-secret", "value": "{{cron_secret}}"}],
+                        "url": {
+                            "raw": "{{base_url}}/api/cron/check-payments",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "cron", "check-payments"]
+                        },
+                        "description": "Ejecuta el procesador de pagos.\n\nPara cada transacción pending:\n1. Consulta Horizon: ¿cuánto USDC llegó a esa wallet?\n2. Compara con amount_expected\n3. Actualiza status en DB (completed / overpaid / underpaid / expired)\n4. Si hubo pago → envía fondos desde pool wallet al payout_wallet del merchant\n5. Desbloquea la wallet del pool para el siguiente pago\n\nDespués de ejecutar, consulta el estado con el Paso 3."
+                    }
+                },
+                {
+                    "name": "4b. Cron sin secret ❌ (debe fallar → 401)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 401', () => pm.response.to.have.status(401));",
+                                    "console.log('✅ Cron protegido correctamente');"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/cron/check-payments",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "cron", "check-payments"]
+                        },
+                        "description": "⚠️ Debe devolver 401. El cron sin secret no debe ejecutarse."
+                    }
+                }
+            ]
+        },
+        {
+            "name": "🔧 ADMIN — Gestión del sistema (requiere X-Admin-Secret)",
+            "description": "Endpoints de administración interna.\nTodos requieren el header X-Admin-Secret con el valor de ADMIN_SECRET_KEY.",
+            "item": [
+                {
+                    "name": "A1. Dashboard KPIs ✅",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                                    "const d = pm.response.json().data;",
+                                    "console.log('📊 Dashboard:');",
+                                    "console.log('   Pool total:', d.pool.total, '| Disponibles:', d.pool.available, '| Bloqueadas:', d.pool.locked);",
+                                    "console.log('   Treasury wallets:', d.treasury.count);",
+                                    "console.log('   Transacciones → Total:', d.transactions.total, '| Completadas:', d.transactions.completed, '| Pending:', d.transactions.pending, '| Anomalías:', d.transactions.anomalies);",
+                                    "console.log('   Volumen procesado:', d.volume.total_processed_usdc, 'USDC');"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [{"key": "X-Admin-Secret", "value": "{{admin_secret}}"}],
                         "url": {
                             "raw": "{{base_url}}/api/admin/dashboard",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "admin",
-                                "dashboard"
-                            ]
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "admin", "dashboard"]
                         },
-                        "description": "KPIs en tiempo real: wallets pool, Treasury, transacciones por estado, volumen."
+                        "description": "KPIs del sistema en tiempo real:\n- Pool de wallets: total / disponibles / bloqueadas\n- Treasury: cantidad de wallets treasury\n- Transacciones por estado\n- Volumen total procesado en USDC"
                     }
                 },
                 {
-                    "name": "5. Listar Wallets",
+                    "name": "A2. Balances reales en Horizon ✅",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                                    "const d = pm.response.json().data;",
+                                    "const s = d.summary;",
+                                    "console.log('💰 Balances reales (Horizon):');",
+                                    "console.log('   Total wallets:', s.total);",
+                                    "console.log('   ✅ OK:', s.ok, '| ⚠️  Warning:', s.warning, '| 🔴 Critical:', s.critical, '| ❌ Error:', s.error);",
+                                    "console.log('   USDC en pool:', s.total_usdc_in_pool, 'USDC');",
+                                    "console.log('   USDC en treasury:', s.total_usdc_in_treasury, 'USDC');",
+                                    "const atRisk = d.wallets.filter(w => w.xlm_status !== 'ok');",
+                                    "if(atRisk.length > 0) {",
+                                    "    console.log('⚠️  Wallets con XLM bajo:');",
+                                    "    atRisk.forEach(w => console.log('   '+w.public_key.slice(0,12)+'... idx:'+w.wallet_index+' XLM:'+w.xlm_balance+' ['+w.xlm_status+']'));",
+                                    "}"
+                                ]
+                            }
+                        }
+                    ],
                     "request": {
                         "method": "GET",
-                        "header": [
-                            {
-                                "key": "X-Admin-Secret",
-                                "value": "{{admin_secret}}"
-                            }
-                        ],
+                        "header": [{"key": "X-Admin-Secret", "value": "{{admin_secret}}"}],
                         "url": {
-                            "raw": "{{base_url}}/api/admin/wallets",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "admin",
-                                "wallets"
-                            ]
+                            "raw": "{{base_url}}/api/admin/wallets/balances",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "admin", "wallets", "balances"]
                         },
-                        "description": "Lista todas las wallets del pool y treasury con estado de lock."
+                        "description": "Consulta los balances REALES de todas las wallets directamente en Horizon (blockchain).\n\nDevuelve por cada wallet:\n- xlm_balance: XLM disponible para pagar fees de red\n- usdc_balance: USDC que tiene en este momento\n- xlm_status: ok / warning (<2 XLM) / critical (<1.5 XLM) / error\n\nSummary:\n- total_usdc_in_pool: USDC total varado en wallets del pool\n- total_usdc_in_treasury: USDC disponible para reembolsos\n\n⚠️ Si xlm_status = critical → esa wallet no puede pagar fees → forwards fallarán."
                     }
                 },
                 {
-                    "name": "6. Crear Wallet (agregar al pool)",
+                    "name": "A3. Listar Wallets (DB) ✅",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                                    "const d = pm.response.json().data;",
+                                    "console.log('💼 Wallets:');",
+                                    "console.log('   Pool:', d.total_pool, '| Disponibles:', d.pool_available, '| Bloqueadas:', d.pool_locked);",
+                                    "console.log('   Treasury:', d.treasury_count);",
+                                    "const locked = d.wallets.filter(w => w.is_locked);",
+                                    "if(locked.length > 0) console.log('   Wallets bloqueadas:', locked.map(w => w.public_key.slice(0,8)+'...').join(', '));"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "header": [{"key": "X-Admin-Secret", "value": "{{admin_secret}}"}],
+                        "url": {
+                            "raw": "{{base_url}}/api/admin/wallets",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "admin", "wallets"]
+                        },
+                        "description": "Lista todas las wallets: pool y treasury.\nMuestra wallet_index (orden round-robin), is_locked, locked_until."
+                    }
+                },
+                {
+                    "name": "A4. Agregar Wallet al Pool ✅",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "if(pm.response.code === 201) {",
+                                    "    const d = pm.response.json().wallet;",
+                                    "    console.log('✅ Nueva wallet creada:');",
+                                    "    console.log('   Public Key:', d.public_key);",
+                                    "    console.log('   Índice round-robin:', d.wallet_index);",
+                                    "} else {",
+                                    "    console.log('❌ Error:', pm.response.json().error);",
+                                    "}"
+                                ]
+                            }
+                        }
+                    ],
                     "request": {
                         "method": "POST",
                         "header": [
-                            {
-                                "key": "Content-Type",
-                                "value": "application/json"
-                            },
-                            {
-                                "key": "X-Admin-Secret",
-                                "value": "{{admin_secret}}"
-                            }
+                            {"key": "Content-Type", "value": "application/json"},
+                            {"key": "X-Admin-Secret", "value": "{{admin_secret}}"}
                         ],
-                        "body": {
-                            "mode": "raw",
-                            "raw": "{}"
-                        },
+                        "body": {"mode": "raw", "raw": "{}"},
                         "url": {
                             "raw": "{{base_url}}/api/admin/wallets",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "admin",
-                                "wallets"
-                            ]
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "admin", "wallets"]
                         },
-                        "description": "Crea nueva wallet pool: Friendbot → USDC trustline → DB insert. El stream la detecta automáticamente en ~60s."
+                        "description": "Crea una nueva wallet de pool:\n1. Genera keypair Stellar aleatorio\n2. Llama Friendbot (testnet) → fondea con XLM para fees\n3. Establece USDC trustline\n4. Inserta en DB con el siguiente wallet_index disponible\n\n⚠️ Solo funciona en testnet (Friendbot). Para mainnet, fondear manualmente."
                     }
                 },
                 {
-                    "name": "7. Eliminar Wallet del Pool",
+                    "name": "A5. Eliminar Wallet del Pool ✅",
                     "request": {
                         "method": "DELETE",
                         "header": [
-                            {
-                                "key": "Content-Type",
-                                "value": "application/json"
-                            },
-                            {
-                                "key": "X-Admin-Secret",
-                                "value": "{{admin_secret}}"
-                            }
+                            {"key": "Content-Type", "value": "application/json"},
+                            {"key": "X-Admin-Secret", "value": "{{admin_secret}}"}
                         ],
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n    \"public_key\": \"GXXXXXX_WALLET_PUBKEY_AQUI\"\n}"
+                            "raw": "{\n    \"public_key\": \"GPEGA_AQUI_LA_PUBLIC_KEY_A_ELIMINAR\"\n}"
                         },
                         "url": {
                             "raw": "{{base_url}}/api/admin/wallets",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "admin",
-                                "wallets"
-                            ]
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "admin", "wallets"]
                         },
-                        "description": "Elimina wallet del pool (solo si no está locked ni tiene pending txs). La cuenta Stellar sigue existiendo."
+                        "description": "Elimina una wallet del pool.\nSolo funciona si la wallet está libre y sin transacciones pending.\nLa cuenta Stellar sigue existiendo en la blockchain."
                     }
                 },
                 {
-                    "name": "8. Ejecutar Reembolso",
+                    "name": "A6. Ejecutar Reembolso ✅",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "if(pm.response.code === 200) {",
+                                    "    const d = pm.response.json();",
+                                    "    console.log('✅ Reembolso exitoso');",
+                                    "    console.log('   Hash Stellar:', d.hash);",
+                                    "} else {",
+                                    "    console.log('❌ Error:', pm.response.code, pm.response.json().error);",
+                                    "}"
+                                ]
+                            }
+                        }
+                    ],
                     "request": {
                         "method": "POST",
                         "header": [
-                            {
-                                "key": "Content-Type",
-                                "value": "application/json"
-                            },
-                            {
-                                "key": "X-Admin-Secret",
-                                "value": "{{admin_secret}}"
-                            }
+                            {"key": "Content-Type", "value": "application/json"},
+                            {"key": "X-Admin-Secret", "value": "{{admin_secret}}"}
                         ],
                         "body": {
                             "mode": "raw",
-                            "raw": "{\n    \"transaction_id\": \"{{transaction_id}}\",\n    \"destination_wallet\": \"GDIRECCCION_STELLAR_DEL_CLIENTE\",\n    \"amount\": \"0.50\"\n}"
+                            "raw": "{\n    \"transaction_id\": \"{{transaction_id}}\",\n    \"destination_wallet\": \"GPEGA_AQUI_STELLAR_KEY_DEL_CLIENTE\",\n    \"amount\": \"0.50\"\n}"
                         },
                         "url": {
                             "raw": "{{base_url}}/api/admin/refund",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "admin",
-                                "refund"
-                            ]
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "admin", "refund"]
                         },
-                        "description": "Reembolso desde Treasury. Requiere X-Admin-Secret. Verifica que la tx no esté ya refunded."
+                        "description": "Emite reembolso manual desde la wallet Treasury al cliente.\n\nCuándo usarlo:\n- Cuando un cliente pagó de más (overpaid)\n- Cuando un cliente pagó de menos y quiere recuperar lo enviado (underpaid)\n\nEl admin verifica el caso, decide el monto y emite el reembolso.\nSi la tx Stellar es exitosa, marca la transacción como 'refunded' en la DB."
                     }
                 },
                 {
-                    "name": "8b. Test Refund sin Auth (should fail 401)",
+                    "name": "A7. Reembolso sin Auth ❌ (debe fallar → 401)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 401', () => pm.response.to.have.status(401));",
+                                    "console.log('✅ Admin endpoint protegido correctamente');"
+                                ]
+                            }
+                        }
+                    ],
                     "request": {
                         "method": "POST",
-                        "header": [
-                            {
-                                "key": "Content-Type",
-                                "value": "application/json"
-                            }
-                        ],
+                        "header": [{"key": "Content-Type", "value": "application/json"}],
                         "body": {
                             "mode": "raw",
                             "raw": "{\n    \"transaction_id\": \"{{transaction_id}}\",\n    \"destination_wallet\": \"GTEST\",\n    \"amount\": \"1\"\n}"
                         },
                         "url": {
                             "raw": "{{base_url}}/api/admin/refund",
-                            "host": [
-                                "{{base_url}}"
-                            ],
-                            "path": [
-                                "api",
-                                "admin",
-                                "refund"
-                            ]
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "admin", "refund"]
                         },
-                        "description": "⚠️ Debería devolver 401 Unauthorized. Testea que el refund no funciona sin X-Admin-Secret."
+                        "description": "⚠️ Debe devolver 401. Sin X-Admin-Secret no debe funcionar."
+                    }
+                },
+                {
+                    "name": "A8. Reembolso con wallet inválida ❌ (debe fallar → 400)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                                    "console.log('✅ Validación de wallet activa:', pm.response.json().error);"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {"key": "Content-Type", "value": "application/json"},
+                            {"key": "X-Admin-Secret", "value": "{{admin_secret}}"}
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"transaction_id\": \"{{transaction_id}}\",\n    \"destination_wallet\": \"NO_ES_UNA_KEY_VALIDA\",\n    \"amount\": \"0.50\"\n}"
+                        },
+                        "url": {
+                            "raw": "{{base_url}}/api/admin/refund",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "admin", "refund"]
+                        },
+                        "description": "⚠️ Debe devolver 400. destination_wallet inválida no debe pasar a Stellar."
+                    }
+                },
+                {
+                    "name": "A9. Dashboard sin Auth ❌ (debe fallar → 401)",
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "type": "text/javascript",
+                                "exec": [
+                                    "pm.test('Status 401', () => pm.response.to.have.status(401));",
+                                    "console.log('✅ Dashboard protegido correctamente');"
+                                ]
+                            }
+                        }
+                    ],
+                    "request": {
+                        "method": "GET",
+                        "url": {
+                            "raw": "{{base_url}}/api/admin/dashboard",
+                            "host": ["{{base_url}}"],
+                            "path": ["api", "admin", "dashboard"]
+                        },
+                        "description": "⚠️ Debe devolver 401. Sin X-Admin-Secret no debe funcionar."
                     }
                 }
             ]

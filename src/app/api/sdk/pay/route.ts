@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import { SUPPORT_CONTACT } from '@/lib/admin-auth';
+import { authenticateRequest } from '@/lib/pollar-auth';
 
-// Helper to calculate expiration time (15 minutes from now)
+const STELLAR_NETWORK = process.env.STELLAR_NETWORK || 'TESTNET';
+
 function getExpirationTimestamp() {
     const date = new Date();
     date.setMinutes(date.getMinutes() + 15);
@@ -11,13 +12,13 @@ function getExpirationTimestamp() {
 
 export async function POST(request: Request) {
     try {
-        const { api_key, amount_expected } = await request.json();
+        const body = await request.json();
+        const { amount_expected, reason, api_key } = body;
 
-        if (!api_key || !amount_expected) {
-            return NextResponse.json({ error: 'Missing api_key or amount_expected' }, { status: 400 });
+        if (!amount_expected || !reason) {
+            return NextResponse.json({ error: 'Missing amount_expected or reason' }, { status: 400 });
         }
 
-        // Validate amount
         const parsedAmount = parseFloat(amount_expected);
         if (isNaN(parsedAmount) || parsedAmount < 0.01 || parsedAmount > 1_000_000) {
             return NextResponse.json(
@@ -26,55 +27,34 @@ export async function POST(request: Request) {
             );
         }
 
-        // 1. Verify the API Key and get the Project
-        const { data: project, error: pError } = await supabase
-            .from('projects')
-            .select('id, merchant_id')
-            .eq('api_key', api_key)
-            .single();
-
-        if (pError || !project) {
+        // Authenticate: supports x-pollar-api-key header (new) or api_key in body (legacy)
+        const auth = await authenticateRequest(request, api_key);
+        if (!auth) {
             return NextResponse.json({ error: 'Invalid API Key' }, { status: 401 });
         }
 
-        // 2. Find an available pool wallet (Round Robin / First Available)
-        // We only select unlocked wallets OR wallets whose lock has expired
-        const now = new Date().toISOString();
-        const { data: availableWallets, error: wError } = await supabase
-            .from('wallets')
-            .select('public_key')
-            .eq('wallet_type', 'pool')
-            .or(`is_locked.eq.false,locked_until.lt.${now}`)
-            .limit(1);
-
-        if (wError || !availableWallets || availableWallets.length === 0) {
-            // In a real high-traffic app, we would dynamically generate a new wallet here, 
-            // but for V1 we return a 503 indicating traffic is too high for the pool.
-            return NextResponse.json({ error: 'System busy: No available wallets in the pool. Retry in 1 minute.' }, { status: 503 });
-        }
-
-        const assignedWallet = availableWallets[0].public_key;
         const expiresAt = getExpirationTimestamp();
 
-        // 3. Lock the wallet dynamically
-        const { error: lockError } = await supabase
-            .from('wallets')
-            .update({
-                is_locked: true,
-                locked_until: expiresAt,
-                last_project_id: project.id
-            })
-            .eq('public_key', assignedWallet);
+        // Atomic round-robin wallet claim — race-condition safe via FOR UPDATE SKIP LOCKED
+        const { data: assignedWallet, error: claimError } = await supabase.rpc('claim_wallet', {
+            p_project_id: auth.projectId,
+            p_locked_until: expiresAt
+        });
 
-        if (lockError) throw lockError;
+        if (claimError || !assignedWallet) {
+            return NextResponse.json(
+                { error: 'System busy: No available wallets in the pool. Retry in 1 minute.' },
+                { status: 503 }
+            );
+        }
 
-        // 4. Create the Transaction Intent Document
         const { data: transaction, error: tError } = await supabase
             .from('transactions')
             .insert({
-                project_id: project.id,
+                project_id: auth.projectId,
                 wallet_pubkey: assignedWallet,
-                amount_expected: amount_expected,
+                reason: reason,
+                amount_expected: parsedAmount,
                 asset_code: 'USDC',
                 status: 'pending',
                 expires_at: expiresAt
@@ -83,12 +63,13 @@ export async function POST(request: Request) {
             .single();
 
         if (tError) {
-            // Rollback the lock if transaction creation fails
-            await supabase.from('wallets').update({ is_locked: false }).eq('public_key', assignedWallet);
+            // Release the wallet if transaction creation fails
+            await supabase.from('wallets')
+                .update({ is_locked: false, locked_until: null })
+                .eq('public_key', assignedWallet);
             throw tError;
         }
 
-        // 5. Return payload for the SDK to generate the QR Code
         return NextResponse.json({
             success: true,
             data: {
@@ -97,7 +78,7 @@ export async function POST(request: Request) {
                 amount: transaction.amount_expected,
                 asset: 'USDC',
                 expires_at: transaction.expires_at,
-                network: 'TESTNET'
+                network: STELLAR_NETWORK
             }
         });
 
@@ -106,3 +87,4 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: err.message }, { status: 500 });
     }
 }
+

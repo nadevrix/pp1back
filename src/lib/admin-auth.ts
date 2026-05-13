@@ -2,10 +2,9 @@ import { NextResponse } from 'next/server';
 
 const ADMIN_SECRET = process.env.ADMIN_SECRET_KEY || '';
 
-// Support contact for overpayment/anomaly notifications
 export const SUPPORT_CONTACT = {
-    phone: '+591 63383781',
-    message: 'Contact Pollar Pay support for refund assistance.'
+    phone: process.env.SUPPORT_PHONE || '',
+    message: process.env.SUPPORT_MESSAGE || 'Contact Pollar Pay support for refund assistance.'
 };
 
 /**

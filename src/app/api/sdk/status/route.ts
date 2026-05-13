@@ -1,44 +1,40 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { SUPPORT_CONTACT } from '@/lib/admin-auth';
+import { authenticateRequest } from '@/lib/pollar-auth';
 
 export async function GET(request: Request) {
     try {
         const { searchParams } = new URL(request.url);
         const transactionId = searchParams.get('transaction_id');
-        const apiKey = searchParams.get('api_key');
+        const apiKey = searchParams.get('api_key'); // legacy support
 
-        if (!transactionId || !apiKey) {
+        if (!transactionId) {
             return NextResponse.json(
-                { error: 'Missing required query params: transaction_id, api_key' },
+                { error: 'Missing required query param: transaction_id' },
                 { status: 400 }
             );
         }
 
-        // 1. Verify the API Key
-        const { data: project, error: pError } = await supabase
-            .from('projects')
-            .select('id')
-            .eq('api_key', apiKey)
-            .single();
-
-        if (pError || !project) {
+        // Authenticate: supports x-pollar-api-key header (new) or api_key query param (legacy)
+        const auth = await authenticateRequest(request, undefined, apiKey ?? undefined);
+        if (!auth) {
             return NextResponse.json({ error: 'Invalid API Key' }, { status: 401 });
         }
 
-        // 2. Fetch the transaction (must belong to this project)
+        // Fetch the transaction (must belong to this project)
         const { data: tx, error: txError } = await supabase
             .from('transactions')
-            .select('id, status, amount_expected, amount_paid, asset_code, expires_at, created_at, wallet_pubkey')
+            .select('id, status, reason, amount_expected, amount_paid, asset_code, expires_at, created_at, wallet_pubkey, forward_status, forward_tx_hash')
             .eq('id', transactionId)
-            .eq('project_id', project.id)
+            .eq('project_id', auth.projectId)
             .single();
 
         if (txError || !tx) {
             return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
         }
 
-        // 3. Calculate remaining amount and time
+        // Calculate remaining amount and time
         const amountExpected = parseFloat(tx.amount_expected);
         const amountPaid = parseFloat(tx.amount_paid || '0');
         const remaining = Math.max(0, amountExpected - amountPaid);
@@ -49,7 +45,7 @@ export async function GET(request: Request) {
         const timeRemainingSeconds = Math.max(0, Math.floor(timeRemainingMs / 1000));
         const isExpired = timeRemainingMs <= 0;
 
-        // 4. Include support info for anomalies
+        // Include support info for anomalies
         const needsSupport = ['overpaid', 'underpaid', 'anomaly', 'late_anomaly'].includes(tx.status);
         const excess = amountPaid > amountExpected ? (amountPaid - amountExpected).toFixed(2) : null;
 
@@ -58,6 +54,7 @@ export async function GET(request: Request) {
             data: {
                 transaction_id: tx.id,
                 status: tx.status,
+                reason: tx.reason,
                 amount_expected: tx.amount_expected,
                 amount_paid: tx.amount_paid,
                 remaining: remaining.toFixed(2),
@@ -67,6 +64,8 @@ export async function GET(request: Request) {
                 time_remaining_seconds: timeRemainingSeconds,
                 is_expired: isExpired,
                 created_at: tx.created_at,
+                forward_status: tx.forward_status,
+                ...(tx.forward_tx_hash && { forward_tx_hash: tx.forward_tx_hash }),
                 // Support info — only included when there's an anomaly
                 ...(needsSupport && {
                     support: {
@@ -84,3 +83,4 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: err.message }, { status: 500 });
     }
 }
+

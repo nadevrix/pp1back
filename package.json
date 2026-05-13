@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^15.0.1",
+    "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.104.1",
     "@types/node-fetch": "^2.6.13",
     "decimal.js": "^10.6.0",
@@ -28,6 +29,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }

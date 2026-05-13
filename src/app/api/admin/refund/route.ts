@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
-import { dispatchRefundFromTreasury } from '@/lib/forwarder';
+import { dispatchRefundFromTreasury } from '@/lib/stellar/transactions';
 import { validateAdminAuth } from '@/lib/admin-auth';
+import { StrKey } from '@stellar/stellar-sdk';
 
 export async function POST(request: Request) {
     // Admin authentication required
@@ -17,6 +18,10 @@ export async function POST(request: Request) {
 
         if (parseFloat(amount) <= 0) {
             return NextResponse.json({ error: 'Refund amount must be greater than 0' }, { status: 400 });
+        }
+
+        if (!StrKey.isValidEd25519PublicKey(destination_wallet)) {
+            return NextResponse.json({ error: 'Invalid destination_wallet: must be a valid Stellar public key' }, { status: 400 });
         }
 
         // Verify the transaction exists and is in a refundable state
