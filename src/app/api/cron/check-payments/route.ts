@@ -3,10 +3,16 @@ import { processPendingPayments } from '@/lib/payments/processor';
 
 const CRON_SECRET = process.env.CRON_SECRET || '';
 
-// Call this endpoint every 5-10 seconds via Vercel Cron, an external scheduler, or curl.
-// Header required: x-cron-secret: <CRON_SECRET>
+// Auth: acepta dos formatos
+//   - "Authorization: Bearer <CRON_SECRET>"  (lo manda Vercel Cron automáticamente)
+//   - "x-cron-secret: <CRON_SECRET>"         (para curl/testing manual)
 export async function GET(request: Request) {
-    if (!CRON_SECRET || request.headers.get('x-cron-secret') !== CRON_SECRET) {
+    if (!CRON_SECRET) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const bearer = request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
+    const custom = request.headers.get('x-cron-secret');
+    if (bearer !== CRON_SECRET && custom !== CRON_SECRET) {
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
