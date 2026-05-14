@@ -7,11 +7,16 @@ const HORIZON = 'https://horizon-testnet.stellar.org';
 const USDC = new Asset('USDC', 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5');
 const server = new Horizon.Server(HORIZON);
 
-const CUSTOMER_SECRET = process.env.CUSTOMER_SECRET;
-if (!CUSTOMER_SECRET) {
-  console.error('ERROR: falta CUSTOMER_SECRET en el entorno (define en .env.local)');
-  process.exit(1);
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) {
+    console.error(`ERROR: falta ${name} en el entorno (define en .env.local)`);
+    process.exit(1);
+  }
+  return v;
 }
+
+const CUSTOMER_SECRET = requireEnv('CUSTOMER_SECRET');
 
 async function main() {
   const [destination, amount] = process.argv.slice(2);
