@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { processPendingPayments } from '@/lib/payments/processor';
+import { flushAllPending } from '@/lib/webhooks/dispatch';
 
 const CRON_SECRET = process.env.CRON_SECRET || '';
 
@@ -17,8 +18,18 @@ export async function GET(request: Request) {
     }
 
     try {
-        const result = await processPendingPayments();
-        return NextResponse.json({ success: true, ...result });
+        // Procesa cobros pendientes + barre webhook deliveries vencidas.
+        // Las deliveries van capped a 50 para no exceder el timeout del cron
+        // en Vercel (10s Hobby / 60s Pro).
+        const [payments, flushed] = await Promise.all([
+            processPendingPayments(),
+            flushAllPending(50),
+        ]);
+        return NextResponse.json({
+            success: true,
+            ...payments,
+            webhooks_flushed: flushed,
+        });
     } catch (err: any) {
         console.error('[CRON] Payment check failed:', err.message);
         return NextResponse.json({ error: err.message }, { status: 500 });

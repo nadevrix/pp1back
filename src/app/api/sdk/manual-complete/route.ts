@@ -4,6 +4,7 @@ import { authenticateRequest } from '@/lib/pollar-auth';
 import { getUsdcReceivedSince } from '@/lib/stellar/horizon';
 import { forwardFromPool } from '@/lib/stellar/transactions';
 import { resolveFeeContext, feeUpdateFields, type FeeContext } from '@/lib/payments/fees';
+import { dispatchEvent, buildPaymentEventPayload } from '@/lib/webhooks/dispatch';
 
 const FINAL_STATES = ['completed', 'overpaid', 'expired', 'refunded', 'anomaly', 'late_anomaly'];
 
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
 
         const { data: tx, error: tErr } = await supabase
             .from('transactions')
-            .select('id, wallet_pubkey, status, created_at, project_id, projects!project_id(payout_wallet)')
+            .select('id, wallet_pubkey, status, reason, amount_expected, created_at, project_id, projects!project_id(payout_wallet)')
             .eq('id', transaction_id)
             .eq('project_id', auth.projectId)
             .single();
@@ -103,6 +104,34 @@ export async function POST(request: Request) {
                 .from('wallets')
                 .update({ is_locked: false, locked_until: null })
                 .eq('public_key', tx.wallet_pubkey);
+        }
+
+        // Webhook payment.completed — el manual-complete cierra la tx,
+        // los integradores deberían enterarse igual que en el flujo on-chain.
+        try {
+            await dispatchEvent({
+                projectId: tx.project_id,
+                transactionId: tx.id,
+                event: 'payment.completed',
+                payload: buildPaymentEventPayload({
+                    event: 'payment.completed',
+                    projectId: tx.project_id,
+                    transaction: {
+                        id: tx.id,
+                        status: 'completed',
+                        reason: tx.reason,
+                        amount_expected: tx.amount_expected,
+                        amount_paid: amountForwarded,
+                        fee_amount: feeCtx?.fee,
+                        payout_amount: feeCtx?.payout,
+                        wallet_pubkey: tx.wallet_pubkey,
+                        forward_tx_hash: forwardHash,
+                        created_at: tx.created_at,
+                    },
+                }),
+            });
+        } catch (e: any) {
+            console.error('[WEBHOOKS] manual-complete dispatch failed', e?.message);
         }
 
         return NextResponse.json({

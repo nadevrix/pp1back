@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { SUPPORT_CONTACT } from '@/lib/admin-auth';
 import { authenticateRequest } from '@/lib/pollar-auth';
 import { processSingleTransaction, type PendingTx } from '@/lib/payments/processor';
+import { flushPendingForProject } from '@/lib/webhooks/dispatch';
 
 export async function GET(request: Request) {
     try {
@@ -67,6 +68,15 @@ export async function GET(request: Request) {
         const timeRemainingMs = expiresAt.getTime() - now.getTime();
         const timeRemainingSeconds = Math.max(0, Math.floor(timeRemainingMs / 1000));
         const isExpired = timeRemainingMs <= 0;
+
+        // Flush webhook deliveries pending de este proyecto. Acotado a 2 para
+        // no exceder el timeout de Vercel — el checkout polea seguido, así
+        // que en 30 s ya cubrimos buena cantidad de retries.
+        try {
+            await flushPendingForProject(auth.projectId, 2);
+        } catch (e: any) {
+            console.warn('[STATUS] webhook flush failed:', e?.message);
+        }
 
         // Include support info for anomalies
         const needsSupport = ['overpaid', 'underpaid', 'anomaly', 'late_anomaly'].includes(tx.status);

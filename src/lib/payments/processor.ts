@@ -2,6 +2,64 @@ import { supabase } from '@/lib/supabase';
 import { getUsdcReceivedSince } from '@/lib/stellar/horizon';
 import { forwardFromPool } from '@/lib/stellar/transactions';
 import { resolveFeeContext, feeUpdateFields } from '@/lib/payments/fees';
+import { dispatchEvent, buildPaymentEventPayload, type WebhookEvent } from '@/lib/webhooks/dispatch';
+
+const FINAL_STATUS_TO_EVENT: Record<string, WebhookEvent | undefined> = {
+    completed: 'payment.completed',
+    overpaid: 'payment.overpaid',
+    underpaid: 'payment.underpaid',
+    expired: 'payment.expired',
+    anomaly: 'payment.anomaly',
+};
+
+// Helper que emite el webhook si el tx llegó a estado final. No bloquea —
+// dispatchEvent es async pero el caller decide si await-ear o no.
+async function emitWebhookIfFinal(args: {
+    finalStatus: string;
+    projectId: string;
+    tx: {
+        id: string;
+        reason: string;
+        amount_expected: number | string;
+        amount_paid: number | string;
+        wallet_pubkey: string | null;
+        created_at: string;
+    };
+    feeAmount?: number;
+    payoutAmount?: number;
+    forwardHash?: string | null;
+}): Promise<void> {
+    const event = FINAL_STATUS_TO_EVENT[args.finalStatus];
+    if (!event) return;
+    try {
+        await dispatchEvent({
+            projectId: args.projectId,
+            transactionId: args.tx.id,
+            event,
+            payload: buildPaymentEventPayload({
+                event,
+                projectId: args.projectId,
+                transaction: {
+                    id: args.tx.id,
+                    status: args.finalStatus,
+                    reason: args.tx.reason,
+                    asset_code: 'USDC',
+                    amount_expected: args.tx.amount_expected,
+                    amount_paid: args.tx.amount_paid,
+                    fee_amount: args.feeAmount,
+                    payout_amount: args.payoutAmount,
+                    wallet_pubkey: args.tx.wallet_pubkey,
+                    forward_tx_hash: args.forwardHash ?? null,
+                    created_at: args.tx.created_at,
+                },
+            }),
+        });
+    } catch (e: any) {
+        // No fallar el processor si el dispatch revienta. Quedará pendiente
+        // y el on-poll lo recuperará.
+        console.error('[WEBHOOKS] dispatch failed for tx', args.tx.id, e?.message);
+    }
+}
 
 // Controls how many wallets are checked against Horizon simultaneously.
 // At 100 wallets the default of 10 is fine. Scale up for larger pools.
@@ -16,6 +74,7 @@ export interface PendingTx {
     wallet_pubkey: string;
     amount_expected: number;
     amount_paid: number;
+    reason: string;
     expires_at: string;
     created_at: string;
     project_id: string;
@@ -164,6 +223,22 @@ export async function processSingleTransaction(
             } else {
                 console.warn(`[PROCESSOR] Wallet ${tx.wallet_pubkey.slice(0, 8)}... left locked with funds. Tx ${tx.id} requires manual retry via /api/admin/tx/${tx.id}/retry-forward`);
             }
+
+            await emitWebhookIfFinal({
+                finalStatus,
+                projectId: tx.project_id,
+                tx: {
+                    id: tx.id,
+                    reason: (tx as unknown as { reason: string }).reason,
+                    amount_expected: tx.amount_expected,
+                    amount_paid: totalReceived,
+                    wallet_pubkey: tx.wallet_pubkey,
+                    created_at: tx.created_at,
+                },
+                feeAmount: (feeFields as { fee_amount?: number }).fee_amount,
+                payoutAmount: (feeFields as { payout_amount?: number }).payout_amount,
+                forwardHash,
+            });
             return { id: tx.id, status: finalStatus, received: totalReceived };
         }
 
@@ -215,6 +290,22 @@ export async function processSingleTransaction(
                 } else {
                     console.warn(`[PROCESSOR] Wallet ${tx.wallet_pubkey.slice(0, 8)}... left locked with funds. Tx ${tx.id} requires manual retry via /api/admin/tx/${tx.id}/retry-forward`);
                 }
+
+                await emitWebhookIfFinal({
+                    finalStatus,
+                    projectId: tx.project_id,
+                    tx: {
+                        id: tx.id,
+                        reason: (tx as unknown as { reason: string }).reason,
+                        amount_expected: tx.amount_expected,
+                        amount_paid: totalReceived,
+                        wallet_pubkey: tx.wallet_pubkey,
+                        created_at: tx.created_at,
+                    },
+                    feeAmount: (feeFields as { fee_amount?: number }).fee_amount,
+                    payoutAmount: (feeFields as { payout_amount?: number }).payout_amount,
+                    forwardHash,
+                });
                 return { id: tx.id, status: finalStatus, received: totalReceived };
             }
 
@@ -245,7 +336,7 @@ export async function processSingleTransaction(
 export async function retryForward(txId: string): Promise<ProcessResult> {
     const { data: tx, error } = await supabase
         .from('transactions')
-        .select('id, wallet_pubkey, amount_expected, amount_paid, expires_at, created_at, project_id, status, forward_status, projects!project_id(payout_wallet)')
+        .select('id, wallet_pubkey, amount_expected, amount_paid, reason, expires_at, created_at, project_id, status, forward_status, projects!project_id(payout_wallet)')
         .eq('id', txId)
         .single();
 
@@ -290,6 +381,26 @@ export async function retryForward(txId: string): Promise<ProcessResult> {
             .eq('id', txId);
 
         await unlockWallet(tx.wallet_pubkey);
+
+        // El retry manual también dispara webhook — el comercio se entera
+        // recién ahora de que el cobro pasó del estado 'anomaly' a completed.
+        const txRow = tx as unknown as { reason?: string; created_at?: string };
+        await emitWebhookIfFinal({
+            finalStatus: newStatus,
+            projectId: tx.project_id,
+            tx: {
+                id: txId,
+                reason: txRow.reason ?? '',
+                amount_expected: tx.amount_expected,
+                amount_paid: totalPaid,
+                wallet_pubkey: tx.wallet_pubkey,
+                created_at: txRow.created_at ?? new Date().toISOString(),
+            },
+            feeAmount: feeCtx.fee,
+            payoutAmount: feeCtx.payout,
+            forwardHash: result.hash,
+        });
+
         return { id: txId, status: newStatus, received: totalPaid };
     } catch (e: any) {
         return { id: txId, status: 'retry_failed', error: e.message };
@@ -305,7 +416,7 @@ export async function retryForward(txId: string): Promise<ProcessResult> {
 export async function processPendingPayments(): Promise<{ processed: number; results: ProcessResult[] }> {
     const { data: pendingTxs, error } = await supabase
         .from('transactions')
-        .select('id, wallet_pubkey, amount_expected, amount_paid, expires_at, created_at, project_id, projects!project_id(payout_wallet)')
+        .select('id, wallet_pubkey, amount_expected, amount_paid, reason, expires_at, created_at, project_id, projects!project_id(payout_wallet)')
         .eq('status', 'pending');
 
     if (error) throw error;
