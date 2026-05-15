@@ -30,6 +30,37 @@ export async function POST(request: Request) {
             );
         }
 
+        // Enforce "1 sucursal" para Free (PDF pág. 8). Starter en adelante = ilimitado.
+        // El merchant ve esto en la UI antes (chequeamos en /sucursales) pero el
+        // backend valida de nuevo por si alguien llama al endpoint directo.
+        const { data: profile, error: profErr } = await supabase
+            .from('profiles')
+            .select('tier')
+            .eq('id', user.id)
+            .single();
+        if (profErr) {
+            console.error('Failed to load profile for sucursal-limit check:', profErr.message);
+            return NextResponse.json({ error: 'Could not load merchant profile' }, { status: 500 });
+        }
+
+        if (profile?.tier === 'free') {
+            const { count, error: cntErr } = await supabase
+                .from('projects')
+                .select('id', { count: 'exact', head: true })
+                .eq('merchant_id', user.id);
+            if (cntErr) throw cntErr;
+            if ((count ?? 0) >= 1) {
+                return NextResponse.json(
+                    {
+                        error: 'El plan Free permite 1 sucursal. Subí a Starter para registrar más.',
+                        code: 'TIER_BRANCH_LIMIT',
+                        tier: 'free',
+                    },
+                    { status: 403 }
+                );
+            }
+        }
+
         // Genera api_key alineada con la network del backend (testnet/mainnet)
         // El SDK lee el prefijo para resolver la URL del backend.
         const { data: apiKeyResult, error: keyErr } = await supabase
