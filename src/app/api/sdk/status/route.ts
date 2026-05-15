@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { SUPPORT_CONTACT } from '@/lib/admin-auth';
 import { authenticateRequest } from '@/lib/pollar-auth';
+import { processSingleTransaction, type PendingTx } from '@/lib/payments/processor';
 
 export async function GET(request: Request) {
     try {
@@ -22,16 +23,38 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: 'Invalid API Key' }, { status: 401 });
         }
 
-        // Fetch the transaction (must belong to this project)
-        const { data: tx, error: txError } = await supabase
+        // Fetch the transaction (must belong to this project).
+        // Incluye projects!project_id(payout_wallet) por si hay que reenviar fondos.
+        const txQuery = await supabase
             .from('transactions')
-            .select('id, status, reason, amount_expected, amount_paid, asset_code, expires_at, created_at, wallet_pubkey, forward_status, forward_tx_hash')
+            .select('id, status, reason, amount_expected, amount_paid, asset_code, expires_at, created_at, wallet_pubkey, forward_status, forward_tx_hash, project_id, projects!project_id(payout_wallet)')
             .eq('id', transactionId)
             .eq('project_id', auth.projectId)
             .single();
 
-        if (txError || !tx) {
+        let tx = txQuery.data;
+        if (txQuery.error || !tx) {
             return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
+        }
+
+        // Auto-procesa la tx si todavía está pending: consulta Horizon, detecta el pago,
+        // reenvía al payout_wallet del merchant y actualiza el estado. Así no hace falta
+        // un cron — cada poll del SDK dispara la verificación de esa tx específica.
+        if (tx.status === 'pending' && tx.wallet_pubkey) {
+            try {
+                await processSingleTransaction(tx as unknown as PendingTx, new Date());
+                // Refetch para devolver el estado actualizado al cliente
+                const refetched = await supabase
+                    .from('transactions')
+                    .select('id, status, reason, amount_expected, amount_paid, asset_code, expires_at, created_at, wallet_pubkey, forward_status, forward_tx_hash, project_id, projects!project_id(payout_wallet)')
+                    .eq('id', transactionId)
+                    .eq('project_id', auth.projectId)
+                    .single();
+                if (refetched.data) tx = refetched.data;
+            } catch (e: any) {
+                console.error('[STATUS] auto-process failed for tx', tx.id, e?.message);
+                // No fallamos la request — el cliente recibe el estado actual igual.
+            }
         }
 
         // Calculate remaining amount and time
