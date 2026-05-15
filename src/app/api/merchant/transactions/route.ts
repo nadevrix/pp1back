@@ -38,7 +38,7 @@ export async function GET(request: Request) {
         let query = supabase
             .from('transactions')
             .select(
-                'id, status, reason, amount_expected, amount_paid, asset_code, wallet_pubkey, expires_at, created_at, forward_status, forward_tx_hash, crypto_tx_hash, project_id',
+                'id, status, reason, amount_expected, amount_paid, fee_amount, payout_amount, tier_at_time, is_free_tx, asset_code, wallet_pubkey, expires_at, created_at, forward_status, forward_tx_hash, crypto_tx_hash, project_id',
                 { count: 'exact' },
             )
             .in('project_id', filterIds)

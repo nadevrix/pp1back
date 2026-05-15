@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { getUsdcReceivedSince } from '@/lib/stellar/horizon';
 import { forwardFromPool } from '@/lib/stellar/transactions';
+import { resolveFeeContext, feeUpdateFields } from '@/lib/payments/fees';
 
 // Controls how many wallets are checked against Horizon simultaneously.
 // At 100 wallets the default of 10 is fine. Scale up for larger pools.
@@ -114,6 +115,7 @@ export async function processSingleTransaction(
             // Forward funds BEFORE updating status.
             let forwardHash: string | null = null;
             let forwardStatus: string = 'pending';
+            let feeFields: Record<string, unknown> = {};
 
             if (totalReceived > 0) {
                 const payoutWallet = getPayoutWallet(tx);
@@ -123,8 +125,16 @@ export async function processSingleTransaction(
                     forwardStatus = 'failed';
                 } else {
                     try {
-                        forwardHash = await forwardFromPool(tx.wallet_pubkey, payoutWallet, totalReceived.toFixed(7));
+                        const feeCtx = await resolveFeeContext(tx.project_id, totalReceived);
+                        const result = await forwardFromPool(
+                            tx.wallet_pubkey,
+                            payoutWallet,
+                            totalReceived.toFixed(7),
+                            feeCtx.fee.toFixed(7),
+                        );
+                        forwardHash = result.hash;
                         forwardStatus = 'completed';
+                        feeFields = feeUpdateFields(feeCtx);
                     } catch (e: any) {
                         console.error(`[PROCESSOR] Forward to merchant failed for expired tx ${tx.id}:`, e.message);
                         finalStatus = 'anomaly';
@@ -141,6 +151,7 @@ export async function processSingleTransaction(
                     amount_paid: totalReceived,
                     ...(forwardHash && { forward_tx_hash: forwardHash }),
                     forward_status: forwardStatus,
+                    ...feeFields,
                 })
                 .eq('id', tx.id);
 
@@ -163,6 +174,7 @@ export async function processSingleTransaction(
 
                 let forwardHash: string | null = null;
                 let forwardStatus: string = 'pending';
+                let feeFields: Record<string, unknown> = {};
 
                 const payoutWallet = getPayoutWallet(tx);
                 if (!payoutWallet) {
@@ -171,8 +183,16 @@ export async function processSingleTransaction(
                     forwardStatus = 'failed';
                 } else {
                     try {
-                        forwardHash = await forwardFromPool(tx.wallet_pubkey, payoutWallet, totalReceived.toFixed(7));
+                        const feeCtx = await resolveFeeContext(tx.project_id, totalReceived);
+                        const result = await forwardFromPool(
+                            tx.wallet_pubkey,
+                            payoutWallet,
+                            totalReceived.toFixed(7),
+                            feeCtx.fee.toFixed(7),
+                        );
+                        forwardHash = result.hash;
                         forwardStatus = 'completed';
+                        feeFields = feeUpdateFields(feeCtx);
                     } catch (e: any) {
                         console.error(`[PROCESSOR] Forward to merchant failed for tx ${tx.id}:`, e.message);
                         finalStatus = 'anomaly';
@@ -186,6 +206,7 @@ export async function processSingleTransaction(
                         amount_paid: totalReceived,
                         ...(forwardHash && { forward_tx_hash: forwardHash }),
                         forward_status: forwardStatus,
+                        ...feeFields,
                     })
                     .eq('id', tx.id);
 
@@ -249,15 +270,22 @@ export async function retryForward(txId: string): Promise<ProcessResult> {
     }
 
     try {
-        const hash = await forwardFromPool(tx.wallet_pubkey, payoutWallet, totalPaid.toFixed(7));
+        const feeCtx = await resolveFeeContext(tx.project_id, totalPaid);
+        const result = await forwardFromPool(
+            tx.wallet_pubkey,
+            payoutWallet,
+            totalPaid.toFixed(7),
+            feeCtx.fee.toFixed(7),
+        );
         const amountExpected = parseFloat(String(tx.amount_expected));
         const newStatus = totalPaid > amountExpected ? 'overpaid' : 'completed';
 
         await supabase.from('transactions')
             .update({
                 status: newStatus,
-                forward_tx_hash: hash,
+                forward_tx_hash: result.hash,
                 forward_status: 'completed',
+                ...feeUpdateFields(feeCtx),
             })
             .eq('id', txId);
 

@@ -27,7 +27,7 @@ export async function GET(request: Request) {
         // Incluye projects!project_id(payout_wallet) por si hay que reenviar fondos.
         const txQuery = await supabase
             .from('transactions')
-            .select('id, status, reason, amount_expected, amount_paid, asset_code, expires_at, created_at, wallet_pubkey, forward_status, forward_tx_hash, project_id, projects!project_id(payout_wallet)')
+            .select('id, status, reason, amount_expected, amount_paid, fee_amount, payout_amount, is_free_tx, asset_code, expires_at, created_at, wallet_pubkey, forward_status, forward_tx_hash, project_id, projects!project_id(payout_wallet)')
             .eq('id', transactionId)
             .eq('project_id', auth.projectId)
             .single();
@@ -46,7 +46,7 @@ export async function GET(request: Request) {
                 // Refetch para devolver el estado actualizado al cliente
                 const refetched = await supabase
                     .from('transactions')
-                    .select('id, status, reason, amount_expected, amount_paid, asset_code, expires_at, created_at, wallet_pubkey, forward_status, forward_tx_hash, project_id, projects!project_id(payout_wallet)')
+                    .select('id, status, reason, amount_expected, amount_paid, fee_amount, payout_amount, is_free_tx, asset_code, expires_at, created_at, wallet_pubkey, forward_status, forward_tx_hash, project_id, projects!project_id(payout_wallet)')
                     .eq('id', transactionId)
                     .eq('project_id', auth.projectId)
                     .single();
@@ -80,6 +80,9 @@ export async function GET(request: Request) {
                 reason: tx.reason,
                 amount_expected: tx.amount_expected,
                 amount_paid: tx.amount_paid,
+                fee_amount: tx.fee_amount,
+                payout_amount: tx.payout_amount,
+                is_free_tx: tx.is_free_tx,
                 remaining: remaining.toFixed(2),
                 asset: tx.asset_code,
                 wallet_address: tx.wallet_pubkey,

@@ -37,7 +37,7 @@ export async function GET(request: Request) {
 
         const { data: allTxs, error: tErr } = await supabase
             .from('transactions')
-            .select('id, status, amount_paid, amount_expected, reason, created_at, project_id, wallet_pubkey, forward_status, forward_tx_hash, crypto_tx_hash, expires_at, asset_code')
+            .select('id, status, amount_paid, amount_expected, fee_amount, payout_amount, reason, created_at, project_id, wallet_pubkey, forward_status, forward_tx_hash, crypto_tx_hash, expires_at, asset_code')
             .in('project_id', projectIds)
             .order('created_at', { ascending: false });
         if (tErr) throw tErr;
@@ -46,8 +46,17 @@ export async function GET(request: Request) {
         const completed = txs.filter(t => t.status === 'completed' || t.status === 'overpaid');
         const pending = txs.filter(t => t.status === 'pending');
 
+        // Bruto recibido del cliente vs neto que llegó al merchant (descontando fees)
         const totalReceived = completed.reduce(
             (sum, t) => sum + parseFloat(t.amount_paid || '0'),
+            0,
+        );
+        const totalPayout = completed.reduce(
+            (sum, t) => sum + parseFloat(t.payout_amount || t.amount_paid || '0'),
+            0,
+        );
+        const totalFees = completed.reduce(
+            (sum, t) => sum + parseFloat(t.fee_amount || '0'),
             0,
         );
 
@@ -66,6 +75,8 @@ export async function GET(request: Request) {
                 branches: branchCount,
                 totals: {
                     received_usdc: totalReceived.toFixed(2),
+                    payout_usdc: totalPayout.toFixed(2),
+                    fees_usdc: totalFees.toFixed(2),
                     transactions: completed.length,
                     pending: pending.length,
                     last_24h: last24h,

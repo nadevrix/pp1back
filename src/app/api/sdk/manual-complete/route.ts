@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { authenticateRequest } from '@/lib/pollar-auth';
 import { getUsdcReceivedSince } from '@/lib/stellar/horizon';
 import { forwardFromPool } from '@/lib/stellar/transactions';
+import { resolveFeeContext, feeUpdateFields, type FeeContext } from '@/lib/payments/fees';
 
 const FINAL_STATES = ['completed', 'overpaid', 'expired', 'refunded', 'anomaly', 'late_anomaly'];
 
@@ -41,6 +42,7 @@ export async function POST(request: Request) {
         let forwardHash: string | null = null;
         let forwardStatus: 'completed' | 'failed' | 'skipped' = 'skipped';
         let amountForwarded = 0;
+        let feeCtx: FeeContext | null = null;
 
         if (tx.wallet_pubkey) {
             try {
@@ -63,11 +65,14 @@ export async function POST(request: Request) {
                     forwardStatus = 'failed';
                 } else {
                     try {
-                        forwardHash = await forwardFromPool(
+                        feeCtx = await resolveFeeContext(tx.project_id, amountForwarded);
+                        const result = await forwardFromPool(
                             tx.wallet_pubkey,
                             payoutWallet,
                             amountForwarded.toFixed(7),
+                            feeCtx.fee.toFixed(7),
                         );
+                        forwardHash = result.hash;
                         forwardStatus = 'completed';
                     } catch (e: any) {
                         console.error(`[MANUAL] Forward failed for ${tx.id}:`, e.message);
@@ -83,6 +88,7 @@ export async function POST(request: Request) {
         };
         if (amountForwarded > 0) updates.amount_paid = amountForwarded;
         if (forwardHash) updates.forward_tx_hash = forwardHash;
+        if (feeCtx && forwardStatus === 'completed') Object.assign(updates, feeUpdateFields(feeCtx));
 
         const { error: updateError } = await supabase
             .from('transactions')
