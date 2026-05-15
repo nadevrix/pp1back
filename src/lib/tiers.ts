@@ -94,6 +94,32 @@ export function isTier(value: unknown): value is Tier {
 }
 
 /**
+ * Ventana máxima hacia atrás permitida para exportar movimientos, según el tier:
+ *   free    → 3 meses
+ *   starter → 6 meses
+ *   growth  → historial completo (null = sin límite)
+ *   scale   → historial completo
+ *
+ * Refleja la página 8 del PDF (Estructura de precios).
+ */
+export function maxExportMonths(tier: Tier): number | null {
+    if (tier === 'free') return 3;
+    if (tier === 'starter') return 6;
+    return null; // growth & scale: sin límite
+}
+
+/**
+ * Fecha más antigua que el comercio puede exportar hoy. null = sin límite.
+ */
+export function earliestExportDate(tier: Tier, now: Date = new Date()): Date | null {
+    const months = maxExportMonths(tier);
+    if (months === null) return null;
+    const d = new Date(now);
+    d.setMonth(d.getMonth() - months);
+    return d;
+}
+
+/**
  * Calcula el fee a cobrar al comercio por una transacción.
  *
  *   fee = max(amount * percent, minimum)
