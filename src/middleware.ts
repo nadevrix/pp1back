@@ -34,7 +34,7 @@ export function middleware(req: NextRequest) {
             status: 204,
             headers: {
                 'Access-Control-Allow-Origin': origin,
-                'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+                'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-pollar-api-key, x-admin-secret, x-cron-secret',
                 'Access-Control-Max-Age': '86400',
                 'Vary': 'Origin',
