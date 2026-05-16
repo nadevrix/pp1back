@@ -11,7 +11,7 @@ export async function GET(request: Request) {
 
         const { data, error } = await supabase
             .from('projects')
-            .select('id, name, reason, payout_wallet, api_key, created_at')
+            .select('id, name, reason, payout_wallet, api_key, default_amount, created_at')
             .eq('merchant_id', user.id)
             .order('created_at', { ascending: false });
 

@@ -71,6 +71,20 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'Failed to generate api key' }, { status: 500 });
         }
 
+        // default_amount: opcional, validar si vino
+        let defaultAmount: number | null = null;
+        const rawDefault = (await request.clone().json().catch(() => ({}))).default_amount;
+        if (rawDefault !== undefined && rawDefault !== null && rawDefault !== '') {
+            const n = typeof rawDefault === 'number' ? rawDefault : parseFloat(rawDefault);
+            if (isNaN(n) || n < 0.01 || n > 1_000_000) {
+                return NextResponse.json(
+                    { error: 'default_amount inválido (0.01 – 1,000,000 USDC)' },
+                    { status: 400 },
+                );
+            }
+            defaultAmount = n;
+        }
+
         const { data, error } = await supabase
             .from('projects')
             .insert({
@@ -79,8 +93,9 @@ export async function POST(request: Request) {
                 reason,
                 payout_wallet,
                 api_key: apiKeyResult,
+                default_amount: defaultAmount,
             })
-            .select('id, api_key, name, payout_wallet, reason, created_at')
+            .select('id, api_key, name, payout_wallet, reason, default_amount, created_at')
             .single();
 
         if (error) throw error;

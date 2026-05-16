@@ -17,7 +17,7 @@ export async function GET(
 
         const { data, error } = await supabase
             .from('projects')
-            .select('id, name, reason, payout_wallet, api_key, created_at, merchant_id')
+            .select('id, name, reason, payout_wallet, api_key, default_amount, created_at, merchant_id')
             .eq('id', id)
             .single();
 
@@ -65,6 +65,23 @@ export async function PATCH(
             }
             allowed.payout_wallet = w;
         }
+        // default_amount: number (0.01-1000000) o null para limpiar el preset
+        if ('default_amount' in body) {
+            if (body.default_amount === null || body.default_amount === '') {
+                allowed.default_amount = null;
+            } else {
+                const n = typeof body.default_amount === 'number'
+                    ? body.default_amount
+                    : parseFloat(body.default_amount);
+                if (isNaN(n) || n < 0.01 || n > 1_000_000) {
+                    return NextResponse.json(
+                        { error: 'default_amount must be a number between 0.01 and 1,000,000 USDC, or null' },
+                        { status: 400 },
+                    );
+                }
+                allowed.default_amount = n;
+            }
+        }
 
         if (Object.keys(allowed).length === 0) {
             return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
@@ -87,7 +104,7 @@ export async function PATCH(
             .from('projects')
             .update(allowed)
             .eq('id', id)
-            .select('id, name, reason, payout_wallet, api_key, created_at')
+            .select('id, name, reason, payout_wallet, api_key, default_amount, created_at')
             .single();
 
         if (error) throw error;
