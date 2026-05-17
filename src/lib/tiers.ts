@@ -78,7 +78,7 @@ export const TIERS: Record<Tier, TierConfig> = {
         freeTransactions: 0,
         features: [
             'Todo lo del tier Growth',
-            'Exportación programada automática',
+            'Exportación programada automática (próximamente)',
             'API de integración completa',
             'Soporte WhatsApp/Telegram <1 h',
         ],

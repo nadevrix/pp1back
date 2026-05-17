@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { getUserFromRequest } from '@/lib/auth-user';
+import { getUserRoleForProject } from '@/lib/branch-access';
 
 const MAX_LIMIT = 100;
 
@@ -16,17 +17,9 @@ export async function GET(
 
         const { id } = await params;
 
-        // Verificar ownership del proyecto antes de listar sus transacciones
-        const { data: project, error: pErr } = await supabase
-            .from('projects')
-            .select('merchant_id')
-            .eq('id', id)
-            .single();
-
-        if (pErr || !project) {
-            return NextResponse.json({ error: 'Project not found' }, { status: 404 });
-        }
-        if (project.merchant_id !== user.id) {
+        // Owner o miembro pueden ver las transacciones de la sucursal.
+        const role = await getUserRoleForProject(user.id, id);
+        if (!role) {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
 

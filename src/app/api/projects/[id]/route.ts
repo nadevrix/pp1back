@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { getUserFromRequest } from '@/lib/auth-user';
 import { StrKey } from '@stellar/stellar-sdk';
+import { getUserRoleForProject } from '@/lib/branch-access';
 
 export async function GET(
     request: Request,
@@ -25,13 +26,14 @@ export async function GET(
             return NextResponse.json({ error: 'Project not found' }, { status: 404 });
         }
 
-        if (data.merchant_id !== user.id) {
+        const role = await getUserRoleForProject(user.id, id);
+        if (!role) {
             return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
         }
 
         // No exponemos merchant_id al cliente — viene del session
         const { merchant_id, ...projectSafe } = data;
-        return NextResponse.json({ success: true, project: projectSafe });
+        return NextResponse.json({ success: true, project: { ...projectSafe, role } });
     } catch (err: any) {
         console.error('Project Get Error:', err.message);
         return NextResponse.json({ error: err.message }, { status: 500 });
