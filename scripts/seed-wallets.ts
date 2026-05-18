@@ -95,7 +95,10 @@ function escapeSQL(str: string): string {
 async function main() {
     const args      = process.argv.slice(2);
     const countArg  = args.indexOf('--count');
-    const WALLET_COUNT = countArg !== -1 ? parseInt(args[countArg + 1]) : 100;
+    // Default 20 wallets. Para mainnet alcanza con 20 (15 min por intent → 20
+    // intents concurrentes en cualquier instante; capacidad enorme para arrancar).
+    // Si esto se queda corto, subir el count.
+    const WALLET_COUNT = countArg !== -1 ? parseInt(args[countArg + 1]) : 20;
 
     console.log(`\nPollar Pay — Pool Wallet Seeder`);
     console.log(`Seeding ${WALLET_COUNT} pool wallets...\n`);
