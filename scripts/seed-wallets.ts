@@ -42,7 +42,7 @@ const server         = new Horizon.Server(HORIZON_URL);
 const USDC_ASSET     = new Asset('USDC', USDC_ISSUER);
 
 // Output SQL file path (relative to project root)
-const SQL_OUTPUT_PATH = resolve(__dirname, '../../database/seeds/pollar-pay-wallets.sql');
+const SQL_OUTPUT_PATH = resolve(__dirname, '../../database/seeds/pollar-pay-pool.sql');
 
 async function sleep(ms: number) {
     return new Promise(r => setTimeout(r, ms));
@@ -151,7 +151,7 @@ async function main() {
 function writeSQLFile(rows: string[], startIndex: number) {
     const timestamp = new Date().toISOString();
     const header = `-- =============================================================
--- POLLAR-PAY — Pool Wallet Seed
+-- POLLAR PAY — Pool wallets
 -- =============================================================
 -- Generado: ${timestamp}
 -- Wallets: ${rows.length} (índices ${startIndex}..${startIndex + rows.length - 1})
@@ -164,14 +164,19 @@ function writeSQLFile(rows: string[], startIndex: number) {
 -- CÓMO APLICAR EN SUPABASE:
 --   1. Asegurate de haber aplicado database/schema.sql primero
 --   2. Pegá este archivo en el SQL Editor de Supabase y ejecutá
+--   3. Aplicá también pollar-pay-treasury.sql para configurar la treasury
 --
--- ON CONFLICT DO NOTHING: seguro de correr múltiples veces.
+-- IDEMPOTENTE: ON CONFLICT (public_key) DO UPDATE — pegarlo varias veces
+-- es seguro. Si una pubkey ya existe, se actualizan secret/type/index.
 -- =============================================================
 
 INSERT INTO public.wallets (public_key, secret_key, wallet_type, wallet_index, is_locked)
 VALUES
 ${rows.map((r, i) => `  ${r}${i < rows.length - 1 ? ',' : ''}`).join('\n')}
-ON CONFLICT (public_key) DO NOTHING;
+ON CONFLICT (public_key) DO UPDATE SET
+  secret_key   = EXCLUDED.secret_key,
+  wallet_type  = EXCLUDED.wallet_type,
+  wallet_index = EXCLUDED.wallet_index;
 `;
 
     // Ensure output directory exists
@@ -180,9 +185,9 @@ ON CONFLICT (public_key) DO NOTHING;
     mkdirSync(dirname(SQL_OUTPUT_PATH), { recursive: true });
 
     writeFileSync(SQL_OUTPUT_PATH, header, 'utf8');
-    console.log(`\n✅ SQL exportado a: database/seeds/pollar-pay-wallets.sql`);
+    console.log(`\n✅ SQL exportado a: database/seeds/pollar-pay-pool.sql`);
     console.log(`   Commitealo al repo para no tener que re-correr este script.`);
-    console.log(`   En futuros deploys: schema.sql → pollar-pay-wallets.sql → listo.\n`);
+    console.log(`   En futuros deploys: schema.sql → pollar-pay-pool.sql → pollar-pay-treasury.sql → listo.\n`);
 }
 
 main().catch(err => {
