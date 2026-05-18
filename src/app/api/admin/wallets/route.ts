@@ -3,7 +3,6 @@ import { supabase } from '@/lib/supabase';
 import { validateAdminAuth } from '@/lib/admin-auth';
 import { Keypair, TransactionBuilder, Operation } from '@stellar/stellar-sdk';
 import { stellarClient, USDC_ASSET, NETWORK_PASSPHRASE } from '@/lib/stellar/client';
-import { encryptKey } from '@/lib/crypto';
 
 // GET — List all wallets with lock status
 export async function GET(request: Request) {
@@ -89,7 +88,7 @@ export async function POST(request: Request) {
         // 4. Insert into DB
         const { error: dbError } = await supabase.from('wallets').insert({
             public_key: publicKey,
-            secret_key_encrypted: encryptKey(keypair.secret()),
+            secret_key: keypair.secret(),
             wallet_type: 'pool',
             wallet_index: nextIndex
         });

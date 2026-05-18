@@ -1,7 +1,6 @@
 import { Keypair, TransactionBuilder, Operation } from '@stellar/stellar-sdk';
 import { stellarClient, USDC_ASSET, NETWORK_PASSPHRASE } from './client';
 import { supabase } from '@/lib/supabase';
-import { decryptKey } from '@/lib/crypto';
 
 export interface ForwardResult {
     /** Stellar hash de la tx con las 1-2 operaciones de payment */
@@ -43,7 +42,7 @@ export async function forwardFromPool(
 
     const { data: poolWallet } = await supabase
         .from('wallets')
-        .select('secret_key_encrypted')
+        .select('secret_key')
         .eq('public_key', poolPubkey)
         .single();
 
@@ -60,7 +59,7 @@ export async function forwardFromPool(
         resolvedTreasury = t.public_key;
     }
 
-    const poolKp = Keypair.fromSecret(decryptKey(poolWallet.secret_key_encrypted));
+    const poolKp = Keypair.fromSecret(poolWallet.secret_key);
     const sourceAccount = await stellarClient.loadAccount(poolKp.publicKey());
 
     // Base fee = 100 stroops por operación. Con 2 ops son 200 stroops total.
@@ -100,13 +99,13 @@ export async function dispatchRefundFromTreasury(destinationPubkey: string, amou
 
     const { data: treasuryWallet } = await supabase
         .from('wallets')
-        .select('secret_key_encrypted')
+        .select('secret_key')
         .eq('wallet_type', 'treasury')
         .single();
 
     if (!treasuryWallet) throw new Error('Treasury wallet not configured');
 
-    const treasuryKp = Keypair.fromSecret(decryptKey(treasuryWallet.secret_key_encrypted));
+    const treasuryKp = Keypair.fromSecret(treasuryWallet.secret_key);
     const sourceAccount = await stellarClient.loadAccount(treasuryKp.publicKey());
 
     const tx = new TransactionBuilder(sourceAccount, { fee: '100', networkPassphrase: NETWORK_PASSPHRASE })

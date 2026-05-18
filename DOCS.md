@@ -14,13 +14,13 @@ Next.js 16 corriendo en el **puerto 3000**. Todos los endpoints son API Routes b
 | `STELLAR_NETWORK_PASSPHRASE` | `Test SDF Network ; September 2015` para testnet |
 | `STELLAR_USDC_ISSUER` | Issuer del USDC en la red. Testnet: `GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5` |
 | `STELLAR_NETWORK` | `TESTNET` o `MAINNET` — se devuelve al SDK en cada intent |
-| `POLLAR_MASTER_ENCRYPTION_KEY` | 32 bytes en hex — cifra las claves secretas de las wallets |
 | `ADMIN_SECRET_KEY` | Header `X-Admin-Secret` para endpoints admin |
 | `CRON_SECRET` | Header `x-cron-secret` para el endpoint del procesador |
+| `NEXT_PUBLIC_CHECKOUT_BASE_URL` | Base URL del hosted checkout (ver `checkout_url` en `/api/sdk/pay`) |
 | `SUPPORT_PHONE` | Número de soporte devuelto en anomalías |
 | `SUPPORT_MESSAGE` | Mensaje de soporte devuelto en anomalías |
 
-Si `POLLAR_MASTER_ENCRYPTION_KEY` no está definida, el servidor usa un fallback de desarrollo (`scryptSync('development-secret', 'salt', 32)`). **Nunca usar ese fallback en producción.**
+Las secret keys de las pool wallets se guardan **en plaintext** en `public.wallets.secret_key`. El backend las lee directo y firma con `Keypair.fromSecret()`. Para que esto sea seguro, restringí el acceso a la Service Role Key de Supabase a un grupo pequeño y mantené el repo privado.
 
 ---
 
@@ -491,7 +491,6 @@ Si la wallet del índice siguiente está locked, la RPC prueba `44`, `45`... has
 | Archivo | Rol |
 |---|---|
 | `src/lib/supabase.ts` | Cliente Supabase con `SERVICE_ROLE_KEY` — bypasea RLS |
-| `src/lib/crypto.ts` | `encryptKey()` / `decryptKey()` — AES-256-GCM para claves privadas de wallets |
 | `src/lib/forwarder.ts` | `forwardToTreasury()`, `dispatchRefundFromTreasury()` — transacciones Stellar |
 | `src/lib/admin-auth.ts` | `validateAdminAuth()` — valida header `X-Admin-Secret` |
 | `src/lib/payment-processor.ts` | `processPendingPayments()` — núcleo de detección de pagos |

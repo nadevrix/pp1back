@@ -18,7 +18,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { validateAdminAuth } from '@/lib/admin-auth';
-import { encryptKey } from '@/lib/crypto';
 import { Keypair, TransactionBuilder, Operation } from '@stellar/stellar-sdk';
 import { stellarClient, NETWORK_PASSPHRASE, USDC_ASSET } from '@/lib/stellar/client';
 
@@ -101,7 +100,7 @@ export async function POST(request: Request) {
 
         const { error: insertErr } = await supabase.from('wallets').insert({
             public_key: keypair.publicKey(),
-            secret_key_encrypted: encryptKey(keypair.secret()),
+            secret_key: keypair.secret(),
             wallet_type: 'treasury',
             wallet_index: null,
             is_locked: false,

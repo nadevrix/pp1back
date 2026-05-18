@@ -1,12 +1,19 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { getUserFromRequest } from '@/lib/auth-user';
+import { processSingleTransaction, type PendingTx } from '@/lib/payments/processor';
 
 // Listado consolidado de transacciones del comercio (todas sus sucursales).
 // Filtros: status, project_id (sucursal), desde, hasta. Paginación con limit + offset.
 // Devuelve también el nombre de la sucursal en cada fila para que la UI no
 // tenga que hacer un segundo round-trip.
+//
+// Side effect: al listar, dispara processSingleTransaction sobre las primeras
+// PENDING_CHECK_LIMIT tx pending del merchant. Es lo que reemplaza al cron en
+// Vercel — cada vez que el comercio abre /movimientos, el sistema "se
+// despierta" y procesa pagos atrasados.
 const MAX_LIMIT = 200;
+const PENDING_CHECK_LIMIT = 10;
 
 export async function GET(request: Request) {
     try {
@@ -34,6 +41,28 @@ export async function GET(request: Request) {
 
         const ownedIds = new Set(projects.map(p => p.id));
         const filterIds = branchId && ownedIds.has(branchId) ? [branchId] : projects.map(p => p.id);
+
+        // Auto-chequeo: procesa las primeras N pending del merchant antes de
+        // devolver la lista. Reemplaza al cron — cada vez que el comercio entra
+        // a /movimientos, los pagos atrasados se confirman solos.
+        try {
+            const { data: pendings } = await supabase
+                .from('transactions')
+                .select('id, wallet_pubkey, amount_expected, amount_paid, reason, expires_at, created_at, project_id, projects!project_id(payout_wallet)')
+                .in('project_id', filterIds)
+                .eq('status', 'pending')
+                .order('created_at', { ascending: false })
+                .limit(PENDING_CHECK_LIMIT);
+
+            if (pendings && pendings.length > 0) {
+                const now = new Date();
+                await Promise.allSettled(
+                    pendings.map(tx => processSingleTransaction(tx as unknown as PendingTx, now)),
+                );
+            }
+        } catch (e: any) {
+            console.warn('[MERCHANT_TX] auto-process pending failed:', e?.message);
+        }
 
         let query = supabase
             .from('transactions')

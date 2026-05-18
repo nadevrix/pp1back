@@ -5,16 +5,16 @@
  *   1. Genera keypairs Stellar aleatorios
  *   2. Fondea cada una con Friendbot (testnet) → obtiene XLM para fees
  *   3. Establece trustline de USDC
- *   4. Inserta en Supabase
- *   5. Exporta database/seeds/wallets.sql → commitear este archivo al repo
+ *   4. Inserta en Supabase con las secrets en plaintext
+ *   5. Exporta database/seeds/pollar-pay-wallets.sql para commitear al repo
  *
- * La próxima vez que deploys, solo pegar wallets.sql en Supabase — sin re-correr este script.
+ * La próxima vez que deploys, solo pegar el SQL en Supabase — sin re-correr este script.
  *
  * Usage:
  *   npx ts-node --project tsconfig.json scripts/seed-wallets.ts
  *   npx ts-node --project tsconfig.json scripts/seed-wallets.ts --count 10
  *
- * Requirements: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, POLLAR_MASTER_ENCRYPTION_KEY
+ * Requirements: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  */
 
 import { config } from 'dotenv';
@@ -24,7 +24,6 @@ config({ path: resolve(__dirname, '../.env.local') });
 
 import { createClient } from '@supabase/supabase-js';
 import { Keypair, TransactionBuilder, Operation, Asset, Networks, Horizon } from '@stellar/stellar-sdk';
-import crypto from 'crypto';
 
 const SUPABASE_URL         = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_KEY         = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
@@ -32,35 +31,18 @@ const HORIZON_URL          = process.env.STELLAR_HORIZON_URL || 'https://horizon
 const FRIENDBOT_URL        = process.env.STELLAR_FRIENDBOT_URL || 'https://friendbot.stellar.org';
 const NETWORK_PASSPHRASE   = process.env.STELLAR_NETWORK_PASSPHRASE || Networks.TESTNET;
 const USDC_ISSUER          = process.env.STELLAR_USDC_ISSUER || 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5';
-const ENCRYPTION_KEY_HEX   = process.env.POLLAR_MASTER_ENCRYPTION_KEY || '';
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
     console.error('❌ Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local');
     process.exit(1);
 }
 
-if (!ENCRYPTION_KEY_HEX) {
-    console.error('❌ Missing POLLAR_MASTER_ENCRYPTION_KEY in .env.local');
-    console.error('   Generate one with: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
-    process.exit(1);
-}
-
-const ENCRYPTION_KEY = Buffer.from(ENCRYPTION_KEY_HEX, 'hex');
 const supabase       = createClient(SUPABASE_URL, SUPABASE_KEY);
 const server         = new Horizon.Server(HORIZON_URL);
 const USDC_ASSET     = new Asset('USDC', USDC_ISSUER);
 
 // Output SQL file path (relative to project root)
-const SQL_OUTPUT_PATH = resolve(__dirname, '../../database/seeds/wallets.sql');
-
-function encryptKey(text: string): string {
-    const iv      = crypto.randomBytes(16);
-    const cipher  = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
-    let encrypted = cipher.update(text, 'utf8', 'hex');
-    encrypted    += cipher.final('hex');
-    const authTag = cipher.getAuthTag().toString('hex');
-    return `${iv.toString('hex')}:${authTag}:${encrypted}`;
-}
+const SQL_OUTPUT_PATH = resolve(__dirname, '../../database/seeds/pollar-pay-wallets.sql');
 
 async function sleep(ms: number) {
     return new Promise(r => setTimeout(r, ms));
@@ -127,22 +109,22 @@ async function main() {
         try {
             await fundAndSetupWallet(keypair);
 
-            const encryptedSecret = encryptKey(keypair.secret());
+            const secret = keypair.secret();
 
-            // Insert into Supabase
+            // Insert into Supabase (plaintext — fail-fast if alguien lee la DB)
             const { error: dbError } = await supabase.from('wallets').insert({
-                public_key:           keypair.publicKey(),
-                secret_key_encrypted: encryptedSecret,
-                wallet_type:          'pool',
-                wallet_index:         walletIndex,
-                is_locked:            false
+                public_key:   keypair.publicKey(),
+                secret_key:   secret,
+                wallet_type:  'pool',
+                wallet_index: walletIndex,
+                is_locked:    false
             });
 
             if (dbError) throw dbError;
 
             // Collect SQL row for export
             sqlRows.push(
-                `('${escapeSQL(keypair.publicKey())}', '${escapeSQL(encryptedSecret)}', 'pool', ${walletIndex}, false)`
+                `('${escapeSQL(keypair.publicKey())}', '${escapeSQL(secret)}', 'pool', ${walletIndex}, false)`
             );
 
             successCount++;
@@ -169,24 +151,24 @@ async function main() {
 function writeSQLFile(rows: string[], startIndex: number) {
     const timestamp = new Date().toISOString();
     const header = `-- =============================================================
--- POLLAR-PAY — Pool Wallet Seed Data
+-- POLLAR-PAY — Pool Wallet Seed
 -- =============================================================
 -- Generado: ${timestamp}
 -- Wallets: ${rows.length} (índices ${startIndex}..${startIndex + rows.length - 1})
 -- Red: ${NETWORK_PASSPHRASE}
 --
--- ⚠️  IMPORTANTE: estas claves están encriptadas con POLLAR_MASTER_ENCRYPTION_KEY
---     Si cambias esa variable de entorno, estas wallets quedarán inutilizables.
---     Guarda el valor de POLLAR_MASTER_ENCRYPTION_KEY en un lugar seguro.
+-- ⚠️  Las secret keys están en PLAINTEXT. Quien tenga acceso al SQL o a
+--     la DB tiene control total sobre los fondos del pool. No commitear
+--     este archivo en repos públicos.
 --
 -- CÓMO APLICAR EN SUPABASE:
---   1. Asegúrate de haber aplicado database/schema.sql primero
---   2. Pega este archivo en el SQL Editor de Supabase y ejecuta
+--   1. Asegurate de haber aplicado database/schema.sql primero
+--   2. Pegá este archivo en el SQL Editor de Supabase y ejecutá
 --
 -- ON CONFLICT DO NOTHING: seguro de correr múltiples veces.
 -- =============================================================
 
-INSERT INTO public.wallets (public_key, secret_key_encrypted, wallet_type, wallet_index, is_locked)
+INSERT INTO public.wallets (public_key, secret_key, wallet_type, wallet_index, is_locked)
 VALUES
 ${rows.map((r, i) => `  ${r}${i < rows.length - 1 ? ',' : ''}`).join('\n')}
 ON CONFLICT (public_key) DO NOTHING;
@@ -198,9 +180,9 @@ ON CONFLICT (public_key) DO NOTHING;
     mkdirSync(dirname(SQL_OUTPUT_PATH), { recursive: true });
 
     writeFileSync(SQL_OUTPUT_PATH, header, 'utf8');
-    console.log(`\n✅ SQL exportado a: database/seeds/wallets.sql`);
-    console.log(`   Commitea ese archivo al repo para no tener que re-correr este script.`);
-    console.log(`   En futuros deploys: aplica schema.sql → aplica wallets.sql → listo.\n`);
+    console.log(`\n✅ SQL exportado a: database/seeds/pollar-pay-wallets.sql`);
+    console.log(`   Commitealo al repo para no tener que re-correr este script.`);
+    console.log(`   En futuros deploys: schema.sql → pollar-pay-wallets.sql → listo.\n`);
 }
 
 main().catch(err => {

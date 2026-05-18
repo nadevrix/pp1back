@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { authenticateRequest } from '@/lib/pollar-auth';
 
 const STELLAR_NETWORK = process.env.STELLAR_NETWORK || 'TESTNET';
+const CHECKOUT_BASE_URL = process.env.NEXT_PUBLIC_CHECKOUT_BASE_URL || 'http://localhost:3002';
 
 function getExpirationTimestamp() {
     const date = new Date();
@@ -78,7 +79,9 @@ export async function POST(request: Request) {
                 amount: transaction.amount_expected,
                 asset: 'USDC',
                 expires_at: transaction.expires_at,
-                network: STELLAR_NETWORK
+                network: STELLAR_NETWORK,
+                // Hosted Checkout: el comercio redirige al cliente acá.
+                checkout_url: `${CHECKOUT_BASE_URL.replace(/\/$/, '')}/checkout/${transaction.id}`,
             }
         });
 
