@@ -184,12 +184,18 @@ export async function processSingleTransaction(
                     forwardStatus = 'failed';
                 } else {
                     try {
-                        const feeCtx = await resolveFeeContext(tx.project_id, totalReceived);
+                        // Fee se calcula SOBRE lo esperado o lo recibido, lo que sea
+                        // menor. El excedente (overpaid) NO suma al fee — queda
+                        // íntegro en la treasury, el cliente puede reclamarlo.
+                        const baseForFee = Math.min(totalReceived, amountExpected);
+                        const excess = Math.max(0, totalReceived - amountExpected);
+                        const feeCtx = await resolveFeeContext(tx.project_id, baseForFee);
                         const result = await forwardFromPool(
                             tx.wallet_pubkey,
                             payoutWallet,
                             totalReceived.toFixed(7),
                             feeCtx.fee.toFixed(7),
+                            excess.toFixed(7),
                         );
                         forwardHash = result.hash;
                         forwardStatus = 'completed';
@@ -258,12 +264,18 @@ export async function processSingleTransaction(
                     forwardStatus = 'failed';
                 } else {
                     try {
-                        const feeCtx = await resolveFeeContext(tx.project_id, totalReceived);
+                        // Fee solo sobre lo esperado. Excedente (overpaid) va a
+                        // treasury en una op separada para que el cliente pueda
+                        // reclamarlo vía soporte sin que el comercio se lo lleve.
+                        const baseForFee = Math.min(totalReceived, amountExpected);
+                        const excess = Math.max(0, totalReceived - amountExpected);
+                        const feeCtx = await resolveFeeContext(tx.project_id, baseForFee);
                         const result = await forwardFromPool(
                             tx.wallet_pubkey,
                             payoutWallet,
                             totalReceived.toFixed(7),
                             feeCtx.fee.toFixed(7),
+                            excess.toFixed(7),
                         );
                         forwardHash = result.hash;
                         forwardStatus = 'completed';
@@ -361,14 +373,17 @@ export async function retryForward(txId: string): Promise<ProcessResult> {
     }
 
     try {
-        const feeCtx = await resolveFeeContext(tx.project_id, totalPaid);
+        const amountExpected = parseFloat(String(tx.amount_expected));
+        const baseForFee = Math.min(totalPaid, amountExpected);
+        const excess = Math.max(0, totalPaid - amountExpected);
+        const feeCtx = await resolveFeeContext(tx.project_id, baseForFee);
         const result = await forwardFromPool(
             tx.wallet_pubkey,
             payoutWallet,
             totalPaid.toFixed(7),
             feeCtx.fee.toFixed(7),
+            excess.toFixed(7),
         );
-        const amountExpected = parseFloat(String(tx.amount_expected));
         const newStatus = totalPaid > amountExpected ? 'overpaid' : 'completed';
 
         await supabase.from('transactions')
