@@ -79,17 +79,30 @@ export async function GET(request: Request) {
             .limit(200);
         if (oErr) throw oErr;
 
+        // Recientemente resueltos — para mostrar bajo "Deshacer" en el UI por
+        // si el admin tildó Comprobado por error. Limit 50.
+        const { data: resolved, error: rErr } = await supabase
+            .from('transactions')
+            .select('id, status, forward_status, amount_expected, amount_paid, wallet_pubkey, created_at, expires_at, project_id, reason, support_resolved_at, projects!project_id(name)')
+            .not('support_resolved_at', 'is', null)
+            .order('support_resolved_at', { ascending: false })
+            .limit(50);
+        if (rErr) throw rErr;
+
         const forward_failures = (failures ?? []).map(r => shapeRow(r as AnomalyRow));
         const overpayments = (overpaids ?? []).map(r => shapeRow(r as AnomalyRow));
+        const recently_resolved = (resolved ?? []).map(r => shapeRow(r as AnomalyRow));
 
         return NextResponse.json({
             success: true,
             data: {
                 forward_failures,
                 overpayments,
+                recently_resolved,
                 counts: {
                     forward_failures: forward_failures.length,
                     overpayments: overpayments.length,
+                    recently_resolved: recently_resolved.length,
                 },
             },
         });
