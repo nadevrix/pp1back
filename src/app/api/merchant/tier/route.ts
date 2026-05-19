@@ -20,7 +20,7 @@ export async function GET(request: Request) {
 
         const { data: profile, error: pErr } = await supabase
             .from('profiles')
-            .select('tier, tier_assigned_at')
+            .select('tier, tier_assigned_at, scale_paid_until, onboarding_completed')
             .eq('id', user.id)
             .single();
         if (pErr || !profile) {
@@ -77,6 +77,8 @@ export async function GET(request: Request) {
                 tier,
                 tier_label: tierConfig.label,
                 tier_assigned_at: profile.tier_assigned_at,
+                scale_paid_until: profile.scale_paid_until ?? null,
+                onboarding_completed: profile.onboarding_completed ?? true,
                 percent: tierConfig.percent,
                 minimum: tierConfig.minimum,
                 monthly_fee: tierConfig.monthlyFee,

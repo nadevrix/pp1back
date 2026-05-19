@@ -72,17 +72,39 @@ export async function GET(request: Request) {
         let activated = intent.status === 'activated';
         let activatedNow = false;
         if (!activated && COMPLETED_OK.has(tx.status)) {
-            // Update profile.tier + intent.status en una transacción lógica
-            const now = new Date().toISOString();
+            const now = new Date();
+            const nowIso = now.toISOString();
+
+            // Para Scale ($25/mes recurring), extender scale_paid_until 30 días.
+            // Si todavía hay tiempo paid (renovación temprana), partimos del
+            // expiry actual para no perder los días no usados.
+            const updateFields: Record<string, unknown> = {
+                tier: intent.target_tier,
+                tier_assigned_at: nowIso,
+            };
+            if (intent.target_tier === 'scale') {
+                // Leer scale_paid_until actual para extender
+                const { data: prof } = await supabase
+                    .from('profiles')
+                    .select('scale_paid_until')
+                    .eq('id', user.id)
+                    .single();
+                const currentExpiryStr = prof?.scale_paid_until as string | null | undefined;
+                const currentExpiry = currentExpiryStr ? new Date(currentExpiryStr) : null;
+                const startFrom = currentExpiry && currentExpiry > now ? currentExpiry : now;
+                const newExpiry = new Date(startFrom.getTime() + 30 * 24 * 60 * 60 * 1000);
+                updateFields.scale_paid_until = newExpiry.toISOString();
+            }
+
             const { error: profErr } = await supabase
                 .from('profiles')
-                .update({ tier: intent.target_tier, tier_assigned_at: now })
+                .update(updateFields)
                 .eq('id', user.id);
             if (profErr) throw profErr;
 
             const { error: intErr } = await supabase
                 .from('billing_intents')
-                .update({ status: 'activated', activated_at: now })
+                .update({ status: 'activated', activated_at: nowIso })
                 .eq('id', intent.id);
             if (intErr) console.error('billing_intent update error:', intErr.message);
 
