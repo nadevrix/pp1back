@@ -3,6 +3,7 @@ import { getUsdcReceivedSince } from '@/lib/stellar/horizon';
 import { forwardFromPool } from '@/lib/stellar/transactions';
 import { resolveFeeContext, feeUpdateFields } from '@/lib/payments/fees';
 import { dispatchEvent, buildPaymentEventPayload, type WebhookEvent } from '@/lib/webhooks/dispatch';
+import { promoteIfEligible } from '@/lib/payments/tier-graduation';
 
 const FINAL_STATUS_TO_EVENT: Record<string, WebhookEvent | undefined> = {
     completed: 'payment.completed',
@@ -245,6 +246,11 @@ export async function processSingleTransaction(
                 payoutAmount: (feeFields as { payout_amount?: number }).payout_amount,
                 forwardHash,
             });
+            // Auto-promote del merchant si cruzó umbral. Best-effort, no falla la tx.
+            if (finalStatus === 'completed' || finalStatus === 'overpaid') {
+                promoteIfEligible(tx.project_id).catch(e =>
+                    console.error('[PROCESSOR] promoteIfEligible failed:', e?.message));
+            }
             return { id: tx.id, status: finalStatus, received: totalReceived };
         }
 
@@ -318,6 +324,11 @@ export async function processSingleTransaction(
                     payoutAmount: (feeFields as { payout_amount?: number }).payout_amount,
                     forwardHash,
                 });
+                // Auto-promote del merchant si cruzó umbral. Best-effort.
+                if (finalStatus === 'completed' || finalStatus === 'overpaid') {
+                    promoteIfEligible(tx.project_id).catch(e =>
+                        console.error('[PROCESSOR] promoteIfEligible failed:', e?.message));
+                }
                 return { id: tx.id, status: finalStatus, received: totalReceived };
             }
 
