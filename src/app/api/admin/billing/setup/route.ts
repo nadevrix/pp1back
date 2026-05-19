@@ -1,81 +1,28 @@
+// ─── POST /api/admin/billing/setup ──────────────────────────────────────────
+// Endpoint manual para crear (o actualizar) el billing project.
+//
+// Normalmente NO HACE FALTA llamarlo — billing/upgrade lo auto-crea la
+// primera vez que un merchant intenta pagar Scale. Este endpoint queda
+// como entry point manual por si querés:
+//   - Cambiar el payout_wallet del billing project (pasar `payout_wallet`
+//     en el body)
+//   - Forzar el bootstrap sin esperar al primer Scale
+//
+// Body opcional:
+//   { payout_wallet?: string }   override la wallet (sino usa treasury)
+//
+// Devuelve: { project_id, api_key, payout_wallet, network }
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { NextResponse } from 'next/server';
-import { randomBytes } from 'node:crypto';
 import { StrKey } from '@stellar/stellar-sdk';
 import { supabase } from '@/lib/supabase';
 import { validateAdminAuth } from '@/lib/admin-auth';
-import { BILLING_PROJECT_NAME, BILLING_WALLET, getBillingProject } from '@/lib/billing';
+import { ensureBillingProject, getBillingProject } from '@/lib/billing';
 
 const STELLAR_NETWORK = (process.env.STELLAR_NETWORK || 'TESTNET').toLowerCase() === 'mainnet'
     ? 'mainnet'
     : 'testnet';
-
-// Email del system profile que es dueño del billing project.
-// .internal es un TLD reservado por IANA — nunca va a chocar con un email real.
-const SYSTEM_PROFILE_EMAIL = 'billing-system@pollar.internal';
-
-/**
- * Devuelve el ID del profile dueño del billing project. Si no existe (primer
- * setup en este Supabase), crea uno self-contenido:
- *   1) Crea un auth.user vía admin API con password random (no se loguea nunca)
- *   2) El trigger handle_new_user inserta su profile
- *   3) Actualiza el profile a role='admin' y devuelve su id
- *
- * Idempotente: si el system profile ya existe, lo reusa.
- */
-async function ensureSystemOwnerId(): Promise<string> {
-    // 1. ¿Ya existe el system profile?
-    const { data: existing } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('email', SYSTEM_PROFILE_EMAIL)
-        .maybeSingle();
-    if (existing?.id) return existing.id;
-
-    // 2. ¿Hay otro admin "legacy" (de antes de este código)?
-    const { data: legacyAdmin } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('role', 'admin')
-        .limit(1)
-        .maybeSingle();
-    if (legacyAdmin?.id) return legacyAdmin.id;
-
-    // 3. No existe ninguno — bootstrap. Crear auth user + promoverlo a admin.
-    const randomPassword = randomBytes(32).toString('hex');
-    const { data: created, error: createErr } = await supabase.auth.admin.createUser({
-        email: SYSTEM_PROFILE_EMAIL,
-        password: randomPassword,
-        email_confirm: true, // sin email de confirmación — internal user
-        user_metadata: { is_system: true, purpose: 'billing_owner' },
-    });
-    if (createErr || !created?.user) {
-        throw new Error(`No se pudo crear el system user: ${createErr?.message ?? 'unknown'}`);
-    }
-    const systemUserId = created.user.id;
-
-    // El trigger handle_new_user ya insertó el profile. Lo promovemos a admin.
-    const { error: updErr } = await supabase
-        .from('profiles')
-        .update({ role: 'admin' })
-        .eq('id', systemUserId);
-    if (updErr) {
-        throw new Error(`No se pudo promover el system profile: ${updErr.message}`);
-    }
-
-    return systemUserId;
-}
-
-// ─── POST /api/admin/billing/setup ──────────────────────────────────────────
-// Idempotente. Crea (o reusa) el "system billing project" que recibe los
-// cobros de planes pagos. El profile owner del project es el admin
-// (cualquier user con role='admin' — el primero que encuentre).
-//
-// Body opcional:
-//   { payout_wallet?: string }   override la wallet (sino usa POLLAR_BILLING_WALLET)
-//
-// Devuelve:
-//   { project_id, api_key, payout_wallet, network }
-// ─────────────────────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
     const authError = validateAdminAuth(request);
@@ -87,28 +34,21 @@ export async function POST(request: Request) {
             ? body.payout_wallet.trim()
             : null;
 
-        const wallet = walletOverride ?? BILLING_WALLET;
-        if (!wallet) {
-            return NextResponse.json(
-                { error: 'No billing wallet set. Pasá payout_wallet en el body o seteá POLLAR_BILLING_WALLET en env.' },
-                { status: 400 },
-            );
-        }
-        if (!StrKey.isValidEd25519PublicKey(wallet)) {
+        if (walletOverride && !StrKey.isValidEd25519PublicKey(walletOverride)) {
             return NextResponse.json(
                 { error: 'payout_wallet inválida (debe ser una pubkey Stellar G...)' },
                 { status: 400 },
             );
         }
 
-        // ¿Ya existe?
+        // Si el billing project ya existe y el caller pasó un nuevo payout_wallet,
+        // actualizamos esa wallet. Sino reusamos.
         const existing = await getBillingProject();
         if (existing) {
-            // Si la wallet cambió, la actualizamos
-            if (existing.payout_wallet !== wallet) {
+            if (walletOverride && existing.payout_wallet !== walletOverride) {
                 const { data: updated, error: uErr } = await supabase
                     .from('projects')
-                    .update({ payout_wallet: wallet })
+                    .update({ payout_wallet: walletOverride })
                     .eq('id', existing.id)
                     .select('id, api_key, payout_wallet')
                     .single();
@@ -132,30 +72,28 @@ export async function POST(request: Request) {
             });
         }
 
-        // No existe — bootstrappear system owner (idempotente).
-        const ownerId = await ensureSystemOwnerId();
-
-        // Generar api_key alineada con la network del backend
-        const { data: keyResult, error: keyErr } = await supabase
-            .rpc('generate_api_key', { p_network: STELLAR_NETWORK });
-        if (keyErr || !keyResult) {
-            console.error('billing-setup: gen api_key error', keyErr);
-            return NextResponse.json({ error: 'No se pudo generar la api_key' }, { status: 500 });
+        // No existe — bootstrap completo (idempotente).
+        // Si pasaron payout_wallet override, lo seteamos en env effectivo
+        // vía el helper (no podemos mutar process.env post-bootstrap, así
+        // que si querés override lo manejamos via UPDATE post-create).
+        const created = await ensureBillingProject();
+        if (walletOverride && created.payout_wallet !== walletOverride) {
+            const { data: updated, error: uErr } = await supabase
+                .from('projects')
+                .update({ payout_wallet: walletOverride })
+                .eq('id', created.id)
+                .select('id, api_key, payout_wallet')
+                .single();
+            if (uErr) throw uErr;
+            return NextResponse.json({
+                success: true,
+                message: 'Billing project creado con override',
+                project_id: updated.id,
+                api_key: updated.api_key,
+                payout_wallet: updated.payout_wallet,
+                network: STELLAR_NETWORK,
+            });
         }
-
-        const { data: created, error: insErr } = await supabase
-            .from('projects')
-            .insert({
-                merchant_id: ownerId,
-                name: BILLING_PROJECT_NAME,
-                reason: 'Cobros internos de planes Pollar Pay',
-                payout_wallet: wallet,
-                api_key: keyResult,
-            })
-            .select('id, api_key, payout_wallet')
-            .single();
-        if (insErr) throw insErr;
-
         return NextResponse.json({
             success: true,
             message: 'Billing project creado',

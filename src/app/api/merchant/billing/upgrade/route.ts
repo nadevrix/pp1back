@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { getUserFromRequest } from '@/lib/auth-user';
 import { isTier, type Tier } from '@/lib/tiers';
-import { getBillingProject, priceForTier } from '@/lib/billing';
+import { ensureBillingProject, priceForTier } from '@/lib/billing';
 
 const STELLAR_NETWORK = process.env.STELLAR_NETWORK || 'TESTNET';
 
@@ -67,13 +67,14 @@ export async function POST(request: Request) {
         }
 
         // Tier pago (Scale) → crear cobro QR
-        const project = await getBillingProject();
-        if (!project) {
+        // El billing project se auto-bootstrappea la primera vez que alguien
+        // intenta pagar Scale. Cero setup manual en deploys nuevos.
+        let project;
+        try {
+            project = await ensureBillingProject();
+        } catch (e: any) {
             return NextResponse.json(
-                {
-                    error: 'Billing no configurado. Pediile al admin que corra POST /api/admin/billing/setup.',
-                    code: 'BILLING_NOT_SETUP',
-                },
+                { error: `Billing setup falló: ${e.message}`, code: 'BILLING_NOT_SETUP' },
                 { status: 503 },
             );
         }
