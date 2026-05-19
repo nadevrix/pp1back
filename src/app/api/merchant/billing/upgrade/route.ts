@@ -50,7 +50,12 @@ export async function POST(request: Request) {
         if (price <= 0) {
             const { error } = await supabase
                 .from('profiles')
-                .update({ tier: target, tier_assigned_at: new Date().toISOString() })
+                .update({
+                    tier: target,
+                    tier_assigned_at: new Date().toISOString(),
+                    // Si vino desde onboarding, también marcamos done.
+                    onboarding_completed: true,
+                })
                 .eq('id', user.id);
             if (error) throw error;
             return NextResponse.json({

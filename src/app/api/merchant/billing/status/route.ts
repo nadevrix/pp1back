@@ -81,6 +81,10 @@ export async function GET(request: Request) {
             const updateFields: Record<string, unknown> = {
                 tier: intent.target_tier,
                 tier_assigned_at: nowIso,
+                // Si el merchant pagó Scale durante onboarding, marcamos también
+                // el onboarding como completado para que no quede atrapado en
+                // /onboarding/plan después de pagar.
+                onboarding_completed: true,
             };
             if (intent.target_tier === 'scale') {
                 // Leer scale_paid_until actual para extender
