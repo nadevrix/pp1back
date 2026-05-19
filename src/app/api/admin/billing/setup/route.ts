@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { randomBytes } from 'node:crypto';
 import { StrKey } from '@stellar/stellar-sdk';
 import { supabase } from '@/lib/supabase';
 import { validateAdminAuth } from '@/lib/admin-auth';
@@ -7,6 +8,62 @@ import { BILLING_PROJECT_NAME, BILLING_WALLET, getBillingProject } from '@/lib/b
 const STELLAR_NETWORK = (process.env.STELLAR_NETWORK || 'TESTNET').toLowerCase() === 'mainnet'
     ? 'mainnet'
     : 'testnet';
+
+// Email del system profile que es dueño del billing project.
+// .internal es un TLD reservado por IANA — nunca va a chocar con un email real.
+const SYSTEM_PROFILE_EMAIL = 'billing-system@pollar.internal';
+
+/**
+ * Devuelve el ID del profile dueño del billing project. Si no existe (primer
+ * setup en este Supabase), crea uno self-contenido:
+ *   1) Crea un auth.user vía admin API con password random (no se loguea nunca)
+ *   2) El trigger handle_new_user inserta su profile
+ *   3) Actualiza el profile a role='admin' y devuelve su id
+ *
+ * Idempotente: si el system profile ya existe, lo reusa.
+ */
+async function ensureSystemOwnerId(): Promise<string> {
+    // 1. ¿Ya existe el system profile?
+    const { data: existing } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', SYSTEM_PROFILE_EMAIL)
+        .maybeSingle();
+    if (existing?.id) return existing.id;
+
+    // 2. ¿Hay otro admin "legacy" (de antes de este código)?
+    const { data: legacyAdmin } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('role', 'admin')
+        .limit(1)
+        .maybeSingle();
+    if (legacyAdmin?.id) return legacyAdmin.id;
+
+    // 3. No existe ninguno — bootstrap. Crear auth user + promoverlo a admin.
+    const randomPassword = randomBytes(32).toString('hex');
+    const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+        email: SYSTEM_PROFILE_EMAIL,
+        password: randomPassword,
+        email_confirm: true, // sin email de confirmación — internal user
+        user_metadata: { is_system: true, purpose: 'billing_owner' },
+    });
+    if (createErr || !created?.user) {
+        throw new Error(`No se pudo crear el system user: ${createErr?.message ?? 'unknown'}`);
+    }
+    const systemUserId = created.user.id;
+
+    // El trigger handle_new_user ya insertó el profile. Lo promovemos a admin.
+    const { error: updErr } = await supabase
+        .from('profiles')
+        .update({ role: 'admin' })
+        .eq('id', systemUserId);
+    if (updErr) {
+        throw new Error(`No se pudo promover el system profile: ${updErr.message}`);
+    }
+
+    return systemUserId;
+}
 
 // ─── POST /api/admin/billing/setup ──────────────────────────────────────────
 // Idempotente. Crea (o reusa) el "system billing project" que recibe los
@@ -75,21 +132,8 @@ export async function POST(request: Request) {
             });
         }
 
-        // No existe — buscar (o crear) un admin profile como owner.
-        const { data: admins } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('role', 'admin')
-            .limit(1);
-        let adminId = admins?.[0]?.id;
-        if (!adminId) {
-            return NextResponse.json(
-                {
-                    error: 'No hay ningún profile con role=admin. Promové uno desde el SQL editor: UPDATE profiles SET role=\'admin\' WHERE email LIKE \'%@pollar.local\' LIMIT 1;',
-                },
-                { status: 400 },
-            );
-        }
+        // No existe — bootstrappear system owner (idempotente).
+        const ownerId = await ensureSystemOwnerId();
 
         // Generar api_key alineada con la network del backend
         const { data: keyResult, error: keyErr } = await supabase
@@ -102,7 +146,7 @@ export async function POST(request: Request) {
         const { data: created, error: insErr } = await supabase
             .from('projects')
             .insert({
-                merchant_id: adminId,
+                merchant_id: ownerId,
                 name: BILLING_PROJECT_NAME,
                 reason: 'Cobros internos de planes Pollar Pay',
                 payout_wallet: wallet,
