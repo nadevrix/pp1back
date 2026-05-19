@@ -151,8 +151,23 @@ export async function ensureBillingProject(): Promise<{
         })
         .select('id, api_key, payout_wallet')
         .single();
-    if (insErr || !created) {
-        throw new Error(`No se pudo crear el billing project: ${insErr?.message ?? 'unknown'}`);
+
+    if (insErr) {
+        // Postgres error 23505 = unique_violation. Lo dispara nuestro
+        // UNIQUE INDEX uniq_pollar_billing_project cuando 2 ensureBilling
+        // corren concurrentes y la otra request ya creó la fila.
+        // Refetch + return — no es un error real, es la condición esperada.
+        const isUniqueViolation =
+            (insErr as { code?: string }).code === '23505' ||
+            /duplicate key|unique constraint/i.test(insErr.message ?? '');
+        if (isUniqueViolation) {
+            const winner = await getBillingProject();
+            if (winner) return winner;
+        }
+        throw new Error(`No se pudo crear el billing project: ${insErr.message}`);
+    }
+    if (!created) {
+        throw new Error('No se pudo crear el billing project: respuesta vacía');
     }
     return created;
 }
