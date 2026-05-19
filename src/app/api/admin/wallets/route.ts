@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import { validateAdminAuth } from '@/lib/admin-auth';
-import { Keypair, TransactionBuilder, Operation } from '@stellar/stellar-sdk';
-import { stellarClient, USDC_ASSET, NETWORK_PASSPHRASE } from '@/lib/stellar/client';
+import { Keypair, StrKey } from '@stellar/stellar-sdk';
 
 // GET — List all wallets with lock status
 export async function GET(request: Request) {
@@ -36,78 +35,106 @@ export async function GET(request: Request) {
     }
 }
 
-// POST — Create a new pool wallet and add it to the round-robin rotation
+// POST — Registrar una wallet pool YA preparada externamente.
+//
+// El admin debe:
+//   1. Generar el keypair en Lobstr/Stellar Lab/etc.
+//   2. Fondearla (testnet: Friendbot; mainnet: ≥2 XLM real)
+//   3. Agregar trustline USDC (issuer correcto para la red)
+//   4. ENTONCES sí, llamar este endpoint con { public_key, secret_key }
+//
+// El backend NO hace ninguna operación Stellar — solo guarda el keypair en
+// la DB con el siguiente índice libre. Si después la wallet no tiene
+// trustline / sin XLM, los forwards van a fallar — eso lo verificás vos
+// antes de registrar.
 export async function POST(request: Request) {
     const authError = validateAdminAuth(request);
     if (authError) return authError;
 
     try {
-        const keypair = Keypair.random();
-        const publicKey = keypair.publicKey();
+        const body = await request.json().catch(() => ({}));
+        const publicKey = typeof body.public_key === 'string' ? body.public_key.trim() : '';
+        const secretKey = typeof body.secret_key === 'string' ? body.secret_key.trim() : '';
 
-        // 1. Fund with Friendbot (testnet only — STELLAR_FRIENDBOT_URL must be set)
-        const FRIENDBOT_URL = process.env.STELLAR_FRIENDBOT_URL;
-        if (!FRIENDBOT_URL) {
+        if (!publicKey || !secretKey) {
             return NextResponse.json(
-                { error: 'STELLAR_FRIENDBOT_URL is not configured. Friendbot only exists on testnet.' },
-                { status: 503 }
+                { error: 'Faltan public_key y/o secret_key' },
+                { status: 400 },
             );
         }
-        const friendbotRes = await fetch(`${FRIENDBOT_URL}?addr=${publicKey}`);
-        if (!friendbotRes.ok) {
+        if (!StrKey.isValidEd25519PublicKey(publicKey)) {
             return NextResponse.json(
-                { error: 'Friendbot funding failed. Testnet may be overloaded, retry in a few seconds.' },
-                { status: 503 }
+                { error: 'public_key inválida (debe empezar con G y tener 56 chars)' },
+                { status: 400 },
+            );
+        }
+        if (!StrKey.isValidEd25519SecretSeed(secretKey)) {
+            return NextResponse.json(
+                { error: 'secret_key inválida (debe empezar con S y tener 56 chars)' },
+                { status: 400 },
             );
         }
 
-        // 2. Establish USDC trustline
-        const account = await stellarClient.loadAccount(publicKey);
-        const tx = new TransactionBuilder(account, {
-            fee: '100',
-            networkPassphrase: NETWORK_PASSPHRASE
-        })
-            .addOperation(Operation.changeTrust({ asset: USDC_ASSET }))
-            .setTimeout(30)
-            .build();
+        // Verificá que el secret se corresponde con la pubkey — error temprano si
+        // pegaste el secret de otra wallet por accidente.
+        try {
+            const kp = Keypair.fromSecret(secretKey);
+            if (kp.publicKey() !== publicKey) {
+                return NextResponse.json(
+                    { error: 'La secret_key no corresponde a esa public_key — chequeá que pegaste el par correcto' },
+                    { status: 400 },
+                );
+            }
+        } catch (e: any) {
+            return NextResponse.json({ error: `secret_key inválida: ${e.message}` }, { status: 400 });
+        }
 
-        tx.sign(keypair);
-        await stellarClient.submitTransaction(tx);
+        // ¿Ya existe esa pubkey en el pool?
+        const { data: dup } = await supabase
+            .from('wallets')
+            .select('public_key, wallet_type')
+            .eq('public_key', publicKey)
+            .maybeSingle();
+        if (dup) {
+            return NextResponse.json(
+                { error: `Esa pubkey ya está registrada como wallet ${dup.wallet_type}` },
+                { status: 409 },
+            );
+        }
 
-        // 3. Determine the next wallet_index so this wallet enters the round robin automatically
+        // Auto-asignar el siguiente índice libre
         const { data: maxRow } = await supabase
             .from('wallets')
             .select('wallet_index')
             .eq('wallet_type', 'pool')
             .order('wallet_index', { ascending: false })
             .limit(1)
-            .single();
-
+            .maybeSingle();
         const nextIndex = (maxRow?.wallet_index ?? -1) + 1;
 
-        // 4. Insert into DB
         const { error: dbError } = await supabase.from('wallets').insert({
             public_key: publicKey,
-            secret_key: keypair.secret(),
+            secret_key: secretKey,
             wallet_type: 'pool',
-            wallet_index: nextIndex
+            wallet_index: nextIndex,
+            is_locked: false,
         });
 
         if (dbError) throw dbError;
 
         return NextResponse.json({
             success: true,
-            message: 'Pool wallet created and added to round-robin rotation',
+            message: 'Wallet pool registrada — asegurate de que tenga trustline USDC y XLM suficiente',
             wallet: {
                 public_key: publicKey,
                 wallet_type: 'pool',
                 wallet_index: nextIndex,
-                is_locked: false
-            }
+                is_locked: false,
+            },
         }, { status: 201 });
 
     } catch (err: any) {
-        console.error('Wallet Creation Error:', err.message);
+        console.error('Wallet register error:', err.message);
         return NextResponse.json({ error: err.message }, { status: 500 });
     }
 }
@@ -135,7 +162,7 @@ export async function DELETE(request: Request) {
         }
 
         if (wallet.wallet_type === 'treasury') {
-            return NextResponse.json({ error: 'Cannot delete treasury wallet' }, { status: 403 });
+            return NextResponse.json({ error: 'Cannot delete treasury wallet — use treasury rotate instead' }, { status: 403 });
         }
 
         if (wallet.is_locked) {
@@ -169,7 +196,7 @@ export async function DELETE(request: Request) {
         return NextResponse.json({
             success: true,
             message: 'Wallet removed from pool rotation',
-            note: 'The Stellar account still exists on the blockchain. The round-robin will skip this index automatically.'
+            note: 'La cuenta sigue viva en Stellar. El round-robin saltea su índice automáticamente.'
         });
 
     } catch (err: any) {
