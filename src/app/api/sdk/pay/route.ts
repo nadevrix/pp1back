@@ -60,7 +60,7 @@ export async function POST(request: Request) {
                 status: 'pending',
                 expires_at: expiresAt
             })
-            .select('id, wallet_pubkey, amount_expected, expires_at')
+            .select('id, wallet_pubkey, reason, amount_expected, expires_at')
             .single();
 
         if (tError) {
@@ -76,6 +76,7 @@ export async function POST(request: Request) {
             data: {
                 transaction_id: transaction.id,
                 wallet_address: transaction.wallet_pubkey,
+                reason: transaction.reason,
                 amount: transaction.amount_expected,
                 asset: 'USDC',
                 expires_at: transaction.expires_at,

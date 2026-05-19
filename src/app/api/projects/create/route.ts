@@ -14,7 +14,8 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        const { name, reason, payout_wallet } = await request.json();
+        const body = await request.json().catch(() => ({}));
+        const { name, reason, payout_wallet, default_amount: rawDefault } = body;
 
         if (!name || !reason || !payout_wallet) {
             return NextResponse.json(
@@ -73,7 +74,6 @@ export async function POST(request: Request) {
 
         // default_amount: opcional, validar si vino
         let defaultAmount: number | null = null;
-        const rawDefault = (await request.clone().json().catch(() => ({}))).default_amount;
         if (rawDefault !== undefined && rawDefault !== null && rawDefault !== '') {
             const n = typeof rawDefault === 'number' ? rawDefault : parseFloat(rawDefault);
             if (isNaN(n) || n < 0.01 || n > 1_000_000) {

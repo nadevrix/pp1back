@@ -7,9 +7,9 @@ import { TIERS, isTier, suggestTier, type Tier } from '@/lib/tiers';
 // tier sugerido y free transactions restantes. Una sola request consolidada
 // para que el dashboard pueda renderizar la tarjeta de "Tu plan" sin N llamadas.
 //
-// POST — Cambiar el tier. Para MVP confiamos en la elección del comercio
-// (sin billing real todavía). Cuando aterricemos cobro de cuota Scale habrá
-// que gating este endpoint.
+// El cambio de tier va exclusivamente por /api/merchant/billing/upgrade, que
+// exige cobro on-chain para los tiers pagos (Scale). No exponemos un POST acá
+// para evitar bypass de billing.
 
 export async function GET(request: Request) {
     try {
@@ -100,33 +100,3 @@ export async function GET(request: Request) {
     }
 }
 
-export async function POST(request: Request) {
-    try {
-        const user = await getUserFromRequest(request);
-        if (!user) {
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-        }
-
-        const body = await request.json().catch(() => ({}));
-        const next = body.tier;
-        if (!isTier(next)) {
-            return NextResponse.json(
-                { error: 'tier must be one of: free, starter, growth, scale' },
-                { status: 400 },
-            );
-        }
-
-        const { data, error } = await supabase
-            .from('profiles')
-            .update({ tier: next, tier_assigned_at: new Date().toISOString() })
-            .eq('id', user.id)
-            .select('tier, tier_assigned_at')
-            .single();
-        if (error) throw error;
-
-        return NextResponse.json({ success: true, data });
-    } catch (err: any) {
-        console.error('Tier POST Error:', err.message);
-        return NextResponse.json({ error: err.message }, { status: 500 });
-    }
-}

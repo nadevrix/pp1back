@@ -45,6 +45,14 @@ export async function POST(request: Request) {
         let amountForwarded = 0;
         let feeCtx: FeeContext | null = null;
 
+        // Si hubo pago crypto, mirar cuánto se recibió para reenviarlo.
+        // El fee se calcula sobre lo esperado (no sobre el bruto) — el excedente
+        // de un overpaid va al treasury en una op separada, igual que en el
+        // processor automático. Sin esto, en manual-complete con overpaid el
+        // merchant se quedaba con el excedente y el fee se inflaba.
+        const amountExpected = parseFloat(String(tx.amount_expected));
+        let excessForwarded = 0;
+
         if (tx.wallet_pubkey) {
             try {
                 amountForwarded = await getUsdcReceivedSince(tx.wallet_pubkey, tx.created_at);
@@ -66,12 +74,15 @@ export async function POST(request: Request) {
                     forwardStatus = 'failed';
                 } else {
                     try {
-                        feeCtx = await resolveFeeContext(tx.project_id, amountForwarded);
+                        const baseForFee = Math.min(amountForwarded, amountExpected);
+                        excessForwarded = Math.max(0, amountForwarded - amountExpected);
+                        feeCtx = await resolveFeeContext(tx.project_id, baseForFee);
                         const result = await forwardFromPool(
                             tx.wallet_pubkey,
                             payoutWallet,
                             amountForwarded.toFixed(7),
                             feeCtx.fee.toFixed(7),
+                            excessForwarded.toFixed(7),
                         );
                         forwardHash = result.hash;
                         forwardStatus = 'completed';
@@ -83,8 +94,14 @@ export async function POST(request: Request) {
             }
         }
 
+        // Si hubo excedente y el forward salió bien, marcamos overpaid para que
+        // la métrica refleje que el cliente pagó de más. Si no hubo pago crypto
+        // (clásico cierre por efectivo) marcamos completed sin más.
+        const finalStatus =
+            forwardStatus === 'completed' && excessForwarded > 0 ? 'overpaid' : 'completed';
+
         const updates: Record<string, unknown> = {
-            status: 'completed',
+            status: finalStatus,
             forward_status: forwardStatus,
         };
         if (amountForwarded > 0) updates.amount_paid = amountForwarded;
@@ -106,19 +123,21 @@ export async function POST(request: Request) {
                 .eq('public_key', tx.wallet_pubkey);
         }
 
-        // Webhook payment.completed — el manual-complete cierra la tx,
-        // los integradores deberían enterarse igual que en el flujo on-chain.
+        // Webhook — el manual-complete cierra la tx; los integradores deberían
+        // enterarse igual que en el flujo on-chain. Si hubo excedente lo
+        // notificamos como overpaid para que el comercio pueda accionar.
         try {
+            const event = finalStatus === 'overpaid' ? 'payment.overpaid' : 'payment.completed';
             await dispatchEvent({
                 projectId: tx.project_id,
                 transactionId: tx.id,
-                event: 'payment.completed',
+                event,
                 payload: buildPaymentEventPayload({
-                    event: 'payment.completed',
+                    event,
                     projectId: tx.project_id,
                     transaction: {
                         id: tx.id,
-                        status: 'completed',
+                        status: finalStatus,
                         reason: tx.reason,
                         amount_expected: tx.amount_expected,
                         amount_paid: amountForwarded,
